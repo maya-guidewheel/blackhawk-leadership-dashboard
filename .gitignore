@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment files — never commit real values
+.env
+.env.local
+.env.*.local
+
+# Local database files (production DB lives on Railway volume)
+*.db
+*.db-shm
+*.db-wal
+
+# Customer data CSVs — upload via the dashboard UI, never commit
+*.csv
+!data/issues.sample.csv.example
+
+# Seed data containing real customer readings
+public/data/
+
+# Claude Code local settings
+.claude/
+
+# Netlify (unused — project is deployed on Railway)
+.netlify/
+netlify/
+
+# Internal dev artifacts
+blackhawk_prompt.txt.txt
+_ul
+deno.lock
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.local

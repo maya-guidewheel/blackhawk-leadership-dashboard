@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ─── Brand variables ──────────────────────────────────────────────────── */
+:root {
+  --color-primary:    #32373c;
+  --color-secondary:  #0693e3;
+  --color-accent:     #ff6900;
+  --color-background: #f0f2f5;
+  --color-surface:    #ffffff;
+  --color-text:       #1a1d21;
+  --color-muted:      #6b7280;
+  --color-border:     #e2e4e9;
+  --color-danger:     #cf2e2e;
+  --color-warning:    #ff6900;
+  --color-success:    #22c55e;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  background-color: var(--color-background);
+  color: var(--color-text);
+}
+
+/* ─── Card ─────────────────────────────────────────────────────────────── */
+.bh-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.04);
+}
+
+/* ─── Section heading ───────────────────────────────────────────────────── */
+.bh-section-title {
+  font-size: 0.9375rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.875rem;
+}
+
+.bh-section-title::before {
+  content: '';
+  display: inline-block;
+  width: 3px;
+  height: 1.1em;
+  background: var(--color-accent);
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* ─── Table ─────────────────────────────────────────────────────────────── */
+.bh-table {
+  width: 100%;
+  font-size: 0.8125rem;
+  border-collapse: collapse;
+}
+
+.bh-table thead th {
+  background-color: var(--color-primary);
+  color: rgba(255, 255, 255, 0.88);
+  font-weight: 600;
+  font-size: 0.6875rem;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  padding: 0.5rem 0.75rem;
+  white-space: nowrap;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.bh-table tbody tr {
+  border-bottom: 1px solid var(--color-border);
+  transition: background-color 0.1s ease;
+}
+
+.bh-table tbody tr:nth-child(even) {
+  background-color: #f7f9fc;
+}
+
+.bh-table tbody tr:hover {
+  background-color: #dbeafe !important;
+}
+
+.bh-table tbody td {
+  padding: 0.5rem 0.75rem;
+  color: var(--color-text);
+  vertical-align: middle;
+}
+
+/* ─── Export / ghost buttons ────────────────────────────────────────────── */
+.bh-btn-ghost {
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  padding: 0.375rem 0.875rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.bh-btn-ghost:hover {
+  background-color: var(--color-background);
+  border-color: #c4c8cf;
+  color: var(--color-primary);
+}
+
+/* ─── Sub-card header ───────────────────────────────────────────────────── */
+.bh-sub-header {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--color-border);
+  background-color: #f7f9fc;
+}
+
+.bh-sub-header h3 {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--color-primary);
+  margin: 0;
+}

@@ -1,0 +1,38 @@
+{
+  "name": "blackhawk-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "start": "tsx server.ts"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.9.0",
+    "date-fns": "^4.1.0",
+    "express": "^4.22.1",
+    "multer": "^1.4.5-lts.1",
+    "papaparse": "^5.5.2",
+    "posthog-js": "^1.225.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "recharts": "^2.15.3"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/express": "^4.17.25",
+    "@types/multer": "^1.4.13",
+    "@types/papaparse": "^5.3.15",
+    "@types/react": "^19.1.2",
+    "@types/react-dom": "^19.1.2",
+    "@vitejs/plugin-react": "^4.4.1",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.3",
+    "tailwindcss": "^3.4.17",
+    "tsx": "^4.21.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
