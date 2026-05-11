@@ -9,6 +9,121 @@
 
 ### P0 — Ship blockers / critical exposure
 
+1. **Exec/energy restriction is UI-only; the API enforces only the main password**
+   **Why it matters:** `EnergyGate` gates rendering in the browser only. The server enforces `VITE_PASSWORD` for all `/api/*` routes, including `/api/data/energy/average`. Any user who can use the main Bearer token can call the energy endpoint directly and view leadership-restricted analysis, bypassing the intended “exec-only” control.
+   **Where:** `server.ts` (`/api/data/energy/average` protected by `requireAuth`), `src/auth/EnergyGate.tsx`, `src/utils/api.ts` (main token attached to API calls).
+   **Fix / verify:** Enforce executive authorization server-side for `/api/data/energy/*` (separate exec token validated against `VITE_ENERGY_PASSWORD`, or remove energy routes when exec auth is not present). Verification: with only the main auth token, `curl /api/data/energy/average` should not return `200` unless exec auth is also present.
+
+2. **Bearer token is password-equivalent and stored in `localStorage`**
+   **Why it matters:** After successful login, the client stores `token: btoa(password)` in `localStorage` and reuses it as the Bearer token (`Authorization: Bearer ...`) for API calls. This couples your long-lived credential material to browser storage; if any XSS/vector ever exfiltrates `localStorage`, the attacker can reuse the token to call protected APIs until expiry.
+   **Where:** `src/auth/AuthGate.tsx` (base64 token storage), `src/utils/api.ts` (Authorization header), `server.ts` (Bearer decoded and timing-safe compared to `VITE_PASSWORD`).
+   **Fix / verify:** Switch to opaque, random session tokens stored in `HttpOnly`/`Secure` cookies; rotate and expire server-side. Verification: confirm the API rejects password-equivalent Bearer tokens and tokens can’t be replayed outside cookie scope.
+
+### P1 — High
+
+3. **Free-text operational notes (`comments`) are persisted, served, and exported (privacy risk)**
+   **Why it matters:** Guidewheel `Comments` are parsed and stored in SQLite (`issues.comments`), returned verbatim by `GET /api/data/issues`, and included in exported CSVs. Free text can include operator names, contact info, shift notes, or other sensitive operational material.
+   **Where:** `src/data/parser.ts`, `server.ts` (`comments` field in `/api/data/issues`), `src/utils/exports.ts` (CSV export includes `Comments`).
+   **Fix / verify:** Add explicit privacy guidance for `Comments` in `README.md`. Consider truncation/redaction for display/export (or opt-in export of comments). Verification: exported CSVs should not include sensitive fields unless explicitly required.
+
+4. **PostHog sends fine-grained operational behavior to a US SaaS**
+   **Why it matters:** The app tracks filter changes (`filter_changed`) including date ranges, plant/device selections, threshold, and changeover types. While not “direct PII” by itself, it is operational intelligence and may be subject to internal governance/retention/consent requirements.
+   **Where:** `src/components/GlobalFilters.tsx`, `src/analytics/posthog.ts`, `README.md` (PostHog section).
+   **Fix / verify:** Ensure tracking can be fully disabled (`VITE_POSTHOG_DISABLED=true`) and document retention/consent expectations. Verification: with `VITE_POSTHOG_DISABLED=true`, no PostHog init/capture should occur.
+
+5. **Token misuse risk due to header-based bearer auth + missing CSRF controls (context-dependent)**
+   **Why it matters:** Auth is done via `Authorization: Bearer ...` header (not cookies), which generally reduces classic CSRF risk. However, because the token is stored in `localStorage`, any XSS that can read localStorage becomes catastrophic (see P0-2).
+   **Where:** `src/auth/AuthGate.tsx`, `src/utils/api.ts`, `server.ts` bearer validation.
+   **Fix / verify:** Address at the root with HttpOnly cookies + opaque tokens (preferred; see P0-2). Verification: confirm tokens are not accessible to JS.
+
+### P2 — Medium
+
+6. **Full-table reads + no pagination/date bounding (performance + data-exfil size)**
+   **Why it matters:** The server returns complete datasets:
+   - `GET /api/data/issues` loads all `issues` rows
+   - `GET /api/data/energy/average` loads all `energy_average` rows
+   Responses scale linearly with DB size, increasing latency, bandwidth cost, and the amount of sensitive data an authenticated user can retrieve.
+   **Where:** `server.ts` (`SELECT * FROM issues ...`, `getEnergyAvg` selects all energy_average rows).
+   **Fix / verify:** Add date-bounded queries/pagination (query params validated server-side) and consider response compression + caching (`ETag`/`If-None-Match`). Verification: load time and payload size should drop when selecting narrower date ranges.
+
+7. **No HTTP response compression/caching**
+   **Why it matters:** Large JSON payloads are returned without compression; this increases tail latency and bandwidth costs.
+   **Where:** `server.ts` (no compression/caching middleware detected).
+   **Fix / verify:** Add `compression` middleware and set reasonable caching headers where applicable. Verification: compare payload transfer sizes via browser network inspector.
+
+8. **Upload file metadata is stored (`file_name`) and may retain customer-identifying strings**
+   **Why it matters:** Upload ingestion logs `fileName` (`req.file.originalname`) into `ingestion_log.file_name`. If users upload files that include customer names, this becomes a stored retention of those strings.
+   **Where:** `server.ts` upload handler + `ingestion_log` table schema.
+   **Fix / verify:** Consider hashing or truncating `file_name`, or documenting retention. Verification: file names should not include sensitive identifiers (or should be safely transformed).
+
+### P3 — Low / hardening
+
+9. **Startup logging discloses deployment paths**
+   **Why it matters:** Server logs database path and listens on the configured port. Usually fine, but avoid overly detailed logs in shared/third-party log aggregators.
+   **Where:** `server.ts` listen callback.
+   **Fix / verify:** Downgrade/remove DB-path logging in production. Verification: confirm production logs don’t include sensitive path info.
+
+10. **Supply chain hygiene**
+   **Why it matters:** Dependency versions are pinned via `package-lock.json`, but there is no visible Dependabot/GitHub security automation in-repo.
+   **Where:** repository configuration (no visible `.github/`).
+   **Fix / verify:** Enable automated dependency updates and security alerts. Verification: ensure you have a process for routine CVE remediation.
+
+---
+
+## Verified OK / assumptions
+
+- **XSS via `dangerouslySetInnerHTML` / `innerHTML`:** No matches found in `src/`.
+- **Explicit `eval` / `new Function`:** Not found in application source.
+- **SQLite ingestion safety:** WAL mode enabled; ingestion uses a transaction; dedup uses `INSERT OR IGNORE` + deterministic row hashes.
+- **API rate limiting exists:** `express-rate-limit` is applied for reads and separately for uploads.
+- **Upload size is bounded:** Multer `limits.fileSize` is set (10 MB).
+- **PostHog fallback key:** No hardcoded PostHog default key; tracking only initializes when `VITE_POSTHOG_KEY` is set and can be disabled via `VITE_POSTHOG_DISABLED=true`.
+
+**Assumption:** This review focuses on code-level security; actual exposure depends on infrastructure (how broadly the service is reachable, reverse proxy settings, and any additional edge auth/WAF).
+
+---
+
+## README / PII alignment
+
+The current `README.md` includes a **Data Categories & PII** section that explains that `Comments` are stored in SQLite and identifies what PostHog receives. However, it does not fully specify **retention duration**, and does not include a complete “PII inventory” (identifiers, destinations, retention/rotation) in a legal/compliance-friendly format.  
+Given that `comments` are exported and served verbatim, you should explicitly document retention and handling expectations for customer/operator-provided free text.
+
+---
+
+## API performance summary
+
+| Area | Observation |
+|------|-------------|
+| Read paths | Full dataset reads on each request; no pagination/date-bounding. |
+| Write paths | CSV ingestion is transactional with dedup; max upload size is bounded. |
+| Client | One-shot parallel fetch on mount; in-memory filtering and recomputation for charts. |
+| Network | No response compression/caching detected. |
+
+---
+
+## Recommended next steps (ordered)
+
+1. **Enforce exec authorization server-side for `/api/data/energy/*`** (P0).
+2. **Replace password-equivalent bearer tokens with opaque server sessions stored in HttpOnly cookies** (P0).
+3. **Add privacy governance for `Comments`** (redaction/truncation, export controls, and retention documentation) (P1).
+4. **Implement date-bounded/paginated queries and add compression/caching** for large JSON payloads (P2).
+5. **Harden stored upload metadata retention** (`file_name`) to avoid keeping customer-identifying strings longer than necessary (P2).
+
+---
+
+*Review generated from static analysis of the repository; validate all P0 items against your actual deployment URL and threat model.*
+
+# Security & Performance Review — Blackhawk Leadership Dashboard
+
+**Scope:** Reviewed this repository end-to-end: Express server (`server.ts`), React/Vite client (`src/`), analytics (`src/analytics/posthog.ts`), auth gates (`src/auth/`), data parsing/storage (`src/data/`, SQLite via `better-sqlite3`), Docker/Railway deployment (`Dockerfile`, `railway.toml`), and `README.md` / `.env.example`.  
+**Not reviewed:** Live Railway/Netlify configuration, DNS, WAF, or secrets actually configured in hosting dashboards (only code and docs).
+
+---
+
+## Prioritized findings
+
+### P0 — Ship blockers / critical exposure
+
 1. **Server API has no authentication or authorization**  
    **Why it matters:** Every route on the Express app (`GET /api/status`, `GET /api/data/issues`, `GET /api/data/energy/*`, `POST /api/upload`) is callable by anyone who can reach the host. The React `AuthGate` and `EnergyGate` only run in the browser; they do not protect the API. An attacker with the deployment URL can read the full issues/energy database and upload arbitrary CSVs (data poisoning, DoS via large files).  
    **Where:** `server.ts` (all `/api/*` handlers).  
