@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
+import { apiFetch } from './utils/api'
 import AuthGate from './auth/AuthGate'
 import EnergyGate from './auth/EnergyGate'
 import GlobalFilters from './components/GlobalFilters'
@@ -80,9 +81,9 @@ export default function App() {
     async function loadAll() {
       try {
         const [issuesRes, energyRes, statusRes] = await Promise.all([
-          fetch('/api/data/issues'),
-          fetch('/api/data/energy/average'),
-          fetch('/api/status'),
+          apiFetch('/api/data/issues'),
+          apiFetch('/api/data/energy/average'),
+          apiFetch('/api/status'),
         ])
         if (!issuesRes.ok || !energyRes.ok || !statusRes.ok) throw new Error('Server error')
 
@@ -117,7 +118,7 @@ export default function App() {
 
   // ── Refresh helpers ────────────────────────────────────────────────────────
   const refreshIssues = useCallback(async () => {
-    const res = await fetch('/api/data/issues')
+    const res = await apiFetch('/api/data/issues')
     const data = await res.json()
     const events: ColorChangeEvent[] = (data.events as any[]).map(e => ({
       ...e,
@@ -132,13 +133,13 @@ export default function App() {
   }, [])
 
   const refreshEnergy = useCallback(async () => {
-    const res = await fetch('/api/data/energy/average')
+    const res = await apiFetch('/api/data/energy/average')
     const data = await res.json()
     setAvgEnergyRows(data.rows as EnergyRow[])
   }, [])
 
   const refreshStatus = useCallback(async () => {
-    const res = await fetch('/api/status')
+    const res = await apiFetch('/api/status')
     setDataStatus(await res.json())
   }, [])
 
@@ -153,7 +154,7 @@ export default function App() {
     formData.append('file', file)
 
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: formData })
+      const res = await apiFetch('/api/upload', { method: 'POST', body: formData })
       if (!res.ok) { const err = await res.json(); throw new Error(err.error || 'Upload failed') }
       const result = await res.json() as UploadFeedback
       setUploadFeedback(result)

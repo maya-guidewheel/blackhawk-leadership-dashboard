@@ -1,14 +1,26 @@
 import { useState, type ReactNode, type FormEvent } from 'react'
 
 const ENERGY_AUTH_KEY = 'bh_energy_auth'
-const ENERGY_PASSWORD = import.meta.env.VITE_ENERGY_PASSWORD || 'energy2026'
+const ENERGY_EXPIRY_MS = 12 * 60 * 60 * 1000 // 12 hours, matches main gate
+
+// No fallback — require explicit env var in production.
+const ENERGY_PASSWORD = import.meta.env.VITE_ENERGY_PASSWORD ?? ''
 
 function isEnergyAuthed(): boolean {
   try {
-    return sessionStorage.getItem(ENERGY_AUTH_KEY) === '1'
+    const stored = sessionStorage.getItem(ENERGY_AUTH_KEY)
+    if (!stored) return false
+    const { exp } = JSON.parse(stored)
+    return typeof exp === 'number' && Date.now() < exp
   } catch {
     return false
   }
+}
+
+function setEnergyAuth() {
+  try {
+    sessionStorage.setItem(ENERGY_AUTH_KEY, JSON.stringify({ exp: Date.now() + ENERGY_EXPIRY_MS }))
+  } catch { /* ignore */ }
 }
 
 export default function EnergyGate({ children }: { children: ReactNode }) {
@@ -18,6 +30,21 @@ export default function EnergyGate({ children }: { children: ReactNode }) {
 
   if (authed) return <>{children}</>
 
+  if (!ENERGY_PASSWORD) {
+    return (
+      <div className="flex items-center justify-center py-24">
+        <div className="bh-card p-8 w-full max-w-sm text-center">
+          <p className="text-sm font-semibold mb-1" style={{ color: 'var(--color-danger)' }}>
+            Energy tab not configured
+          </p>
+          <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+            Set <code>VITE_ENERGY_PASSWORD</code> in the environment and redeploy.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!password.trim()) {
@@ -25,7 +52,7 @@ export default function EnergyGate({ children }: { children: ReactNode }) {
       return
     }
     if (password === ENERGY_PASSWORD) {
-      try { sessionStorage.setItem(ENERGY_AUTH_KEY, '1') } catch { /* ignore */ }
+      setEnergyAuth()
       setAuthed(true)
       setError('')
     } else {

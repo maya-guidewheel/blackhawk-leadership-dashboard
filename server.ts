@@ -1,10 +1,11 @@
-import express, { type Request, type Response } from 'express'
+import express, { type Request, type Response, type NextFunction } from 'express'
 import Database from 'better-sqlite3'
 import multer from 'multer'
-import { createHash } from 'node:crypto'
+import { createHash, timingSafeEqual } from 'node:crypto'
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import rateLimit from 'express-rate-limit'
 import { parseCSV, parseEnergyCSV } from './src/data/parser'
 import type { ColorChangeEvent, EnergyRow } from './src/data/types'
 
@@ -93,7 +94,6 @@ const stmts = {
   `),
   getIssues: db.prepare('SELECT * FROM issues ORDER BY calendar_date, device'),
   getEnergyAvg: db.prepare('SELECT machine, date, kwh FROM energy_average ORDER BY machine, date'),
-  getEnergyMax: db.prepare('SELECT machine, date, kwh FROM energy_max ORDER BY machine, date'),
   statsIssues: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM issues'),
   statsEnergyAvg: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM energy_average'),
   statsEnergyMax: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM energy_max'),
@@ -104,6 +104,14 @@ function rowHash(key: string): string {
   return createHash('sha256').update(key).digest('hex').slice(0, 16)
 }
 
+// Timing-safe string comparison to guard against timing attacks on auth.
+function safeCompare(a: string, b: string): boolean {
+  const aBuf = Buffer.from(a)
+  const bBuf = Buffer.from(b)
+  if (aBuf.length !== bBuf.length) return false
+  return timingSafeEqual(aBuf, bBuf)
+}
+
 // ── Ingestion ──────────────────────────────────────────────────────────────
 function ingestIssues(csvText: string, fileName: string) {
   const events = parseCSV(csvText)
@@ -112,7 +120,6 @@ function ingestIssues(csvText: string, fileName: string) {
 
   db.transaction(() => {
     for (const e of events) {
-      // Dedup key: start time + device (unique per event)
       const hash = rowHash(`${e.start_dt.toISOString()}|${e.device}`)
       const r = stmts.insertIssue.run({
         row_hash: hash,
@@ -153,7 +160,6 @@ function ingestEnergy(
 
   db.transaction(() => {
     for (const r of rows) {
-      // Dedup key: machine + date (one reading per machine per day per table)
       const hash = rowHash(`${r.machine}|${r.date}`)
       const result = stmt.run({ row_hash: hash, machine: r.machine, date: r.date, kwh: r.kWh })
       result.changes > 0 ? rowsAdded++ : duplicatesSkipped++
@@ -170,7 +176,6 @@ function ingestEnergy(
 }
 
 // ── Startup Backfill ───────────────────────────────────────────────────────
-// Safe to re-run — INSERT OR IGNORE guarantees no duplicates.
 const SEED_FILES = [
   { rel: 'Issues_All_Devices_2025-10-01_2026-02-13.csv', type: 'issues' as const },
   { rel: 'Issues_All_Devices_2026-01-18_2026-02-17.csv', type: 'issues' as const },
@@ -208,14 +213,67 @@ runBackfill()
 
 // ── Express App ────────────────────────────────────────────────────────────
 const app = express()
+
+// Trust Railway's reverse proxy so rate limiting uses the real client IP.
+app.set('trust proxy', 1)
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 100 * 1024 * 1024 },
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB — realistic CSV ceiling
 })
 app.use(express.json())
 
-// Health check (required by Railway)
+// ── Auth Middleware ────────────────────────────────────────────────────────
+// Validates Bearer token on all /api/* routes.
+// Token = btoa(password) set by AuthGate after successful client-side login.
+// Server compares against its own VITE_PASSWORD env var (never sent to client).
+function requireAuth(req: Request, res: Response, next: NextFunction): void {
+  const expectedPassword = process.env.VITE_PASSWORD
+  if (!expectedPassword) {
+    res.status(500).json({ error: 'Server authentication is not configured.' })
+    return
+  }
+  const header = req.headers.authorization
+  if (!header?.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return
+  }
+  let decoded: string
+  try {
+    decoded = Buffer.from(header.slice(7), 'base64').toString('utf-8')
+  } catch {
+    res.status(401).json({ error: 'Unauthorized' })
+    return
+  }
+  if (!safeCompare(decoded, expectedPassword)) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return
+  }
+  next()
+}
+
+// ── Rate Limiters ──────────────────────────────────────────────────────────
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+})
+
+const uploadLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many uploads. Please wait a moment.' },
+})
+
+// Health check — public, required by Railway orchestration.
 app.get('/health', (_req, res) => res.sendStatus(200))
+
+// Apply rate limiting and auth to all /api routes.
+app.use('/api', apiLimiter, requireAuth)
 
 // ── API: Status ─────────────────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => {
@@ -257,15 +315,8 @@ app.get('/api/data/energy/average', (_req, res) => {
   res.json({ rows: result, total: result.length, lastUpdated: stat.last })
 })
 
-app.get('/api/data/energy/max', (_req, res) => {
-  const rows = stmts.getEnergyMax.all() as any[]
-  const result: EnergyRow[] = rows.map(r => ({ machine: r.machine, date: r.date, kWh: r.kwh }))
-  const stat = stmts.statsEnergyMax.get() as { n: number; last: string | null }
-  res.json({ rows: result, total: result.length, lastUpdated: stat.last })
-})
-
 // ── API: Upload ─────────────────────────────────────────────────────────────
-app.post('/api/upload', upload.single('file'), (req: Request, res: Response) => {
+app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res: Response) => {
   if (!req.file) {
     res.status(400).json({ error: 'No file uploaded' })
     return
@@ -275,7 +326,6 @@ app.post('/api/upload', upload.single('file'), (req: Request, res: Response) => 
   const fileName = req.file.originalname
   const typeHint = (req.body?.type as string | undefined) || ''
 
-  // Auto-detect CSV type from hint, filename, or headers
   const cleanFirst = csvText.replace(/^﻿/, '').split('\n')[0].toLowerCase()
   let type: 'issues' | 'energy_average' | 'energy_max'
 
@@ -290,7 +340,6 @@ app.post('/api/upload', upload.single('file'), (req: Request, res: Response) => 
   ) {
     type = 'energy_average'
   } else {
-    // Default: issues CSV (has Start, End, Duration columns)
     type = 'issues'
   }
 
@@ -301,8 +350,9 @@ app.post('/api/upload', upload.single('file'), (req: Request, res: Response) => 
         : ingestEnergy(csvText, fileName, type)
     res.json({ ...result, type, fileName })
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Ingestion failed'
-    res.status(500).json({ error: msg })
+    // Log full error server-side; return generic message to client.
+    console.error('[upload] ingestion error:', err)
+    res.status(500).json({ error: 'Upload failed. Please check the file format and try again.' })
   }
 })
 
@@ -310,7 +360,6 @@ app.post('/api/upload', upload.single('file'), (req: Request, res: Response) => 
 const distPath = join(__dirname, 'dist')
 if (existsSync(distPath)) {
   app.use(express.static(distPath))
-  // SPA fallback
   app.get('*', (_req, res) => {
     res.sendFile(join(distPath, 'index.html'))
   })
@@ -320,4 +369,7 @@ if (existsSync(distPath)) {
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[server] listening on port ${PORT}`)
   console.log(`[server] database: ${DB_PATH}`)
+  if (!process.env.VITE_PASSWORD) {
+    console.warn('[server] WARNING: VITE_PASSWORD is not set — all /api requests will return 500')
+  }
 })

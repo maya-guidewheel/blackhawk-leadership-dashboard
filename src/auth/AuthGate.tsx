@@ -3,7 +3,8 @@ import { useState, useEffect, type ReactNode, type FormEvent } from 'react'
 const AUTH_KEY = 'bh_auth'
 const EXPIRY_MS = 12 * 60 * 60 * 1000 // 12 hours
 
-const EXPECTED_PASSWORD = import.meta.env.VITE_PASSWORD || 'blackhawk2026'
+// No fallback — if VITE_PASSWORD is unset the server will also reject API calls.
+const EXPECTED_PASSWORD = import.meta.env.VITE_PASSWORD ?? ''
 
 function isAuthenticated(): boolean {
   const stored = localStorage.getItem(AUTH_KEY)
@@ -16,8 +17,12 @@ function isAuthenticated(): boolean {
   }
 }
 
-function setAuth() {
-  localStorage.setItem(AUTH_KEY, JSON.stringify({ exp: Date.now() + EXPIRY_MS }))
+function setAuth(password: string) {
+  // Store expiry + base64-encoded token so apiFetch can send it on every API call.
+  localStorage.setItem(AUTH_KEY, JSON.stringify({
+    exp: Date.now() + EXPIRY_MS,
+    token: btoa(password),
+  }))
 }
 
 export default function AuthGate({ children }: { children: ReactNode }) {
@@ -34,6 +39,22 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   if (authed) return <>{children}</>
 
+  // Build-time misconfiguration — show a clear ops error rather than a broken login.
+  if (!EXPECTED_PASSWORD) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--color-primary)' }}>
+        <div className="bh-card p-8 w-full max-w-sm text-center">
+          <p className="text-sm font-semibold mb-1" style={{ color: 'var(--color-danger)' }}>
+            Dashboard not configured
+          </p>
+          <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
+            Set <code>VITE_PASSWORD</code> in the environment and redeploy.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
   function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!password.trim()) {
@@ -41,7 +62,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
       return
     }
     if (password === EXPECTED_PASSWORD) {
-      setAuth()
+      setAuth(password)
       setAuthed(true)
       setError('')
     } else {
@@ -51,10 +72,7 @@ export default function AuthGate({ children }: { children: ReactNode }) {
 
   return (
     <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--color-primary)' }}>
-      <form
-        onSubmit={handleSubmit}
-        className="bh-card p-8 w-full max-w-sm"
-      >
+      <form onSubmit={handleSubmit} className="bh-card p-8 w-full max-w-sm">
         <div className="mb-6">
           <h1 className="text-xl font-bold mb-1" style={{ color: 'var(--color-primary)' }}>Blackhawk Molding</h1>
           <p className="text-sm font-semibold" style={{ color: 'var(--color-accent)' }}>Color Change Dashboard</p>
