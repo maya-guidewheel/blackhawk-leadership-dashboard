@@ -1,0 +1,26 @@
+---
+description: How to write security/performance/privacy review docs for this repo (and similar forward-deploy dashboards)
+alwaysApply: false
+---
+
+# Security review deliverables (output format)
+
+When the user asks for a **security**, **privacy**, or **performance** review (or an update to `SECURITY_AND_PERFORMANCE_REVIEW.md`), structure the write-up like this:
+
+1. **Short scope** — what was read (server, client, deploy config in-repo, etc.) and what was out of scope (live env, WAF, etc.).
+
+2. **At a glance (stacked, not columns)**  
+   - Use two labeled blocks or bullet lists: **Already in the codebase** vs **Still needs work**.  
+   - **Do not** use markdown tables or side-by-side column layouts for this unless the user **explicitly** asks for columns — they are hard to read in a narrow editor window.
+
+3. **What the developer should do (backlog)**  
+   - Ordered by priority (P0 first).  
+   - For each item: **Problem** (one tight paragraph), **Do** (bulleted concrete steps), **Done when** (testable acceptance, e.g. curl or behavior).
+
+4. **Quick verification** — minimal commands or checks to validate fixes after deploy.
+
+5. **Verified OK** — short bullets for things checked and found acceptable (no fluff).
+
+6. **Prioritized findings** — if the user wants a classic audit list, keep severity labels (P0–P3) but still end with the **backlog** section so implementers know what to ship.
+
+Align with the forward-deploy playbook where relevant: authZ on every route, PII inventory vs code, secrets in client bundle, rate limits, upload bounds, logging of sensitive data.
