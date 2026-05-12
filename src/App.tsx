@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react'
-import { apiFetch } from './utils/api'
+import { apiFetch, clearAuth } from './utils/api'
 import AuthGate from './auth/AuthGate'
 import EnergyGate from './auth/EnergyGate'
 import GlobalFilters from './components/GlobalFilters'
@@ -76,44 +76,87 @@ export default function App() {
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // ── Load all data from API on mount ───────────────────────────────────────
-  useEffect(() => {
-    async function loadAll() {
-      try {
-        const [issuesRes, energyRes, statusRes] = await Promise.all([
-          apiFetch('/api/data/issues'),
-          apiFetch('/api/data/energy/average'),
-          apiFetch('/api/status'),
-        ])
-        if (!issuesRes.ok || !energyRes.ok || !statusRes.ok) throw new Error('Server error')
+  // ── Load all data from API ─────────────────────────────────────────────────
+  // Defined as useCallback so AuthGate can call it again after login.
+  const loadAll = useCallback(async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [issuesRes, energyRes, statusRes] = await Promise.all([
+        apiFetch('/api/data/issues'),
+        apiFetch('/api/data/energy/average'), // 401 here is expected if not energy-authed
+        apiFetch('/api/status'),
+      ])
 
-        const [issuesData, energyData, statusData] = await Promise.all([
-          issuesRes.json(),
-          energyRes.json(),
-          statusRes.json(),
-        ])
-
-        const events: ColorChangeEvent[] = (issuesData.events as any[]).map(e => ({
-          ...e,
-          start_dt: new Date(e.start_dt),
-          end_dt: new Date(e.end_dt),
-        }))
-
-        setAllEvents(events)
-        setAvgEnergyRows(energyData.rows as EnergyRow[])
-        setDataStatus(statusData as DataStatus)
-
-        if (events.length > 0) {
-          const dates = events.map(e => e.calendar_date).sort()
-          setFilters(f => ({ ...f, dateFrom: dates[0], dateTo: dates[dates.length - 1] }))
-        }
-      } catch {
-        setError('Could not reach the server.')
-      } finally {
+      // 401 on issues or status means main auth is stale.
+      // Energy 401 is acceptable — user hasn't passed EnergyGate yet.
+      if (issuesRes.status === 401 || statusRes.status === 401) {
         setLoading(false)
+        return
       }
+
+      if (!issuesRes.ok || !statusRes.ok) {
+        const codes = [issuesRes.status, statusRes.status].join('/')
+        throw new Error(`Server error (HTTP ${codes})`)
+      }
+
+      const [issuesData, statusData] = await Promise.all([
+        issuesRes.json(),
+        statusRes.json(),
+      ])
+
+      const events: ColorChangeEvent[] = (issuesData.events as any[]).map(e => ({
+        ...e,
+        start_dt: new Date(e.start_dt),
+        end_dt: new Date(e.end_dt),
+      }))
+
+      setAllEvents(events)
+      setDataStatus(statusData as DataStatus)
+
+      if (events.length > 0) {
+        const dates = events.map(e => e.calendar_date).sort()
+        setFilters(f => ({ ...f, dateFrom: dates[0], dateTo: dates[dates.length - 1] }))
+      }
+
+      // Load energy data only if the energy session token is already valid.
+      if (energyRes.ok) {
+        const energyData = await energyRes.json()
+        setAvgEnergyRows(energyData.rows as EnergyRow[])
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not reach the server.')
+    } finally {
+      setLoading(false)
     }
-    loadAll()
+  }, [])
+
+  // Called by EnergyGate after the executive password is accepted.
+  const loadEnergy = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/data/energy/average')
+      if (!res.ok) return
+      const data = await res.json()
+      setAvgEnergyRows(data.rows as EnergyRow[])
+      const statusRes = await apiFetch('/api/status')
+      if (statusRes.ok) setDataStatus(await statusRes.json())
+    } catch { /* non-fatal — energy data loads when gate reopens */ }
+  }, [])
+
+  useEffect(() => { loadAll() }, [loadAll])
+
+  // Reset data state when auth expires so stale content doesn't flash on re-login.
+  useEffect(() => {
+    function onAuthExpired() {
+      setAllEvents([])
+      setAvgEnergyRows([])
+      setDataStatus(null)
+      setError('')
+      setLoading(true)
+      clearAuth()
+    }
+    window.addEventListener('auth:expired', onAuthExpired)
+    return () => window.removeEventListener('auth:expired', onAuthExpired)
   }, [])
 
   // ── Refresh helpers ────────────────────────────────────────────────────────
@@ -134,6 +177,7 @@ export default function App() {
 
   const refreshEnergy = useCallback(async () => {
     const res = await apiFetch('/api/data/energy/average')
+    if (!res.ok) return
     const data = await res.json()
     setAvgEnergyRows(data.rows as EnergyRow[])
   }, [])
@@ -196,7 +240,7 @@ export default function App() {
       : null
 
   return (
-    <AuthGate>
+    <AuthGate onLogin={loadAll}>
       <div className="min-h-screen" style={{ backgroundColor: 'var(--color-background)' }}>
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -366,7 +410,7 @@ export default function App() {
 
               {/* ── Energy Tab (executive-gated) ──────────────────────────── */}
               {activeTab === 'energy' && (
-                <EnergyGate>
+                <EnergyGate onAuth={loadEnergy}>
                   {avgEnergyRows.length > 0 ? (
                     <EnergyDashboard avgRows={avgEnergyRows} deviceData={deviceData} />
                   ) : (

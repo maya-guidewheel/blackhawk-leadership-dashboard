@@ -1,10 +1,8 @@
 import { useState, type ReactNode, type FormEvent } from 'react'
+import { apiFetch } from '../utils/api'
 
 const ENERGY_AUTH_KEY = 'bh_energy_auth'
-const ENERGY_EXPIRY_MS = 12 * 60 * 60 * 1000 // 12 hours, matches main gate
-
-// No fallback — require explicit env var in production.
-const ENERGY_PASSWORD = import.meta.env.VITE_ENERGY_PASSWORD ?? ''
+const ENERGY_EXPIRY_MS = 12 * 60 * 60 * 1000
 
 function isEnergyAuthed(): boolean {
   try {
@@ -17,46 +15,52 @@ function isEnergyAuthed(): boolean {
   }
 }
 
-function setEnergyAuth() {
+function setEnergyAuth(token: string) {
   try {
-    sessionStorage.setItem(ENERGY_AUTH_KEY, JSON.stringify({ exp: Date.now() + ENERGY_EXPIRY_MS }))
+    sessionStorage.setItem(ENERGY_AUTH_KEY, JSON.stringify({ exp: Date.now() + ENERGY_EXPIRY_MS, token }))
   } catch { /* ignore */ }
 }
 
-export default function EnergyGate({ children }: { children: ReactNode }) {
+export default function EnergyGate({ children, onAuth }: { children: ReactNode; onAuth?: () => void }) {
   const [authed, setAuthed] = useState(isEnergyAuthed)
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
+  const [checking, setChecking] = useState(false)
 
   if (authed) return <>{children}</>
 
-  if (!ENERGY_PASSWORD) {
-    return (
-      <div className="flex items-center justify-center py-24">
-        <div className="bh-card p-8 w-full max-w-sm text-center">
-          <p className="text-sm font-semibold mb-1" style={{ color: 'var(--color-danger)' }}>
-            Energy tab not configured
-          </p>
-          <p className="text-xs" style={{ color: 'var(--color-muted)' }}>
-            Set <code>VITE_ENERGY_PASSWORD</code> in the environment and redeploy.
-          </p>
-        </div>
-      </div>
-    )
-  }
-
-  function handleSubmit(e: FormEvent) {
+  async function handleSubmit(e: FormEvent) {
     e.preventDefault()
     if (!password.trim()) {
       setError('Please enter the executive password to continue.')
       return
     }
-    if (password === ENERGY_PASSWORD) {
-      setEnergyAuth()
-      setAuthed(true)
-      setError('')
-    } else {
-      setError('Incorrect password. Please try again or contact your Guidewheel representative.')
+    setChecking(true)
+    setError('')
+    try {
+      // Password is validated server-side — no client-side secret needed.
+      const res = await apiFetch('/api/auth/energy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+      })
+      if (res.ok) {
+        const data = await res.json() as { token?: string }
+        setEnergyAuth(data.token ?? '')
+        setAuthed(true)
+        setError('')
+        onAuth?.()
+      } else if (res.status === 401) {
+        setError('Incorrect password. Please try again or contact your Guidewheel representative.')
+      } else if (res.status === 500) {
+        setError('Energy tab not configured. Contact your administrator.')
+      } else {
+        setError(`Server error (HTTP ${res.status}). Try again.`)
+      }
+    } catch {
+      setError('Could not connect to the server.')
+    } finally {
+      setChecking(false)
     }
   }
 
@@ -91,6 +95,7 @@ export default function EnergyGate({ children }: { children: ReactNode }) {
           className="w-full border rounded px-3 py-2 mb-1 focus:outline-none focus:ring-2 text-sm"
           style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
           autoFocus
+          disabled={checking}
           placeholder="Enter password"
         />
         {error && (
@@ -98,10 +103,11 @@ export default function EnergyGate({ children }: { children: ReactNode }) {
         )}
         <button
           type="submit"
-          className="w-full mt-4 text-white rounded px-4 py-2.5 font-semibold transition-opacity hover:opacity-90 text-sm"
+          disabled={checking}
+          className="w-full mt-4 text-white rounded px-4 py-2.5 font-semibold transition-opacity hover:opacity-90 text-sm disabled:opacity-60"
           style={{ backgroundColor: 'var(--color-secondary)' }}
         >
-          Access Energy Data
+          {checking ? 'Checking…' : 'Access Energy Data'}
         </button>
       </form>
     </div>

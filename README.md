@@ -37,9 +37,11 @@ Set these in Railway → Service → Variables. For local dev, copy `.env.exampl
 
 There are two layers of authentication:
 
-1. **Client-side gate (UX)** — `AuthGate.tsx` and `EnergyGate.tsx` check a password before rendering any content. Sessions are stored in localStorage with a 12-hour expiry.
+1. **Client-side gate (UX)** — `AuthGate.tsx` and `EnergyGate.tsx` check a password before rendering any content. Sessions are stored in localStorage / sessionStorage with a 12-hour expiry.
 
-2. **Server-side API auth (security)** — every `/api/*` request requires an `Authorization: Bearer <token>` header. The token is the base64-encoded password, set automatically by the client after login. The server validates it against `VITE_PASSWORD` using a timing-safe comparison. Unauthenticated requests return `401`.
+2. **Server-side API auth (security)** — every `/api/*` request requires an `Authorization: Basic <token>` header validated against `VITE_PASSWORD` (timing-safe). Unauthenticated requests return `401`. The executive Energy tab additionally requires a short-lived opaque token issued by `POST /api/auth/energy` after the energy password is verified; this token is sent via `X-Energy-Token` header and validated server-side on every energy data request.
+
+> **Residual XSS risk:** The main auth credential is stored in `localStorage` as a base64-encoded token. A cross-site scripting (XSS) vulnerability on the same origin could allow an attacker to read it and replay API calls for up to 12 hours. Mitigation: avoid serving untrusted or user-generated HTML from this origin. Upgrading to HttpOnly session cookies is tracked as a future improvement.
 
 > The `/health` endpoint is intentionally public — it is required by Railway's health check.
 
@@ -78,6 +80,8 @@ Tracking fires only when `VITE_POSTHOG_KEY` is set.
 
 To disable locally: set `VITE_POSTHOG_DISABLED=true` in `.env`.
 
+**Governance:** PostHog is hosted in the US (`us.i.posthog.com`). Events include operational telemetry (date ranges, plant names, device IDs, thresholds) but no direct PII. If your customer data agreement requires consent or data residency outside the US, set `VITE_POSTHOG_DISABLED=true` or omit `VITE_POSTHOG_KEY` for that deployment. PostHog's default data retention is 7 years — adjust in your PostHog project settings.
+
 ---
 
 ## Data Categories & PII
@@ -89,7 +93,7 @@ The following data is stored in SQLite and served by the `/api/data/issues` endp
 | `device` | Guidewheel CSV | Machine ID (e.g. `1M001`) |
 | `plant` | Derived from device ID | Addison / Mayflower / Sparks |
 | `start_dt`, `end_dt`, `duration` | Guidewheel CSV | Event timestamps |
-| `comments` | Guidewheel CSV | Free-text; may include operator names or notes |
+| `comments` | Guidewheel CSV | Free-text; may include operator names or notes — confirm retention policy before sharing dashboard access |
 | `tags`, `status` | Guidewheel CSV | Operational metadata |
 
 PostHog receives filter state (date ranges, plant names, device IDs, thresholds) — no direct PII, but fine-grained operational behavior. Data is processed by PostHog (US region, `us.i.posthog.com`).

@@ -1,11 +1,12 @@
 import express, { type Request, type Response, type NextFunction } from 'express'
 import Database from 'better-sqlite3'
 import multer from 'multer'
-import { createHash, timingSafeEqual } from 'node:crypto'
+import { createHash, timingSafeEqual, randomBytes } from 'node:crypto'
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import rateLimit from 'express-rate-limit'
+import compression from 'compression'
 import { parseCSV, parseEnergyCSV } from './src/data/parser'
 import type { ColorChangeEvent, EnergyRow } from './src/data/types'
 
@@ -104,6 +105,12 @@ function rowHash(key: string): string {
   return createHash('sha256').update(key).digest('hex').slice(0, 16)
 }
 
+// Store only a short hash of the original filename so upload paths / identifying
+// strings are not persisted verbatim in ingestion_log.
+function hashFileName(name: string): string {
+  return createHash('sha256').update(name).digest('hex').slice(0, 12)
+}
+
 // Timing-safe string comparison to guard against timing attacks on auth.
 function safeCompare(a: string, b: string): boolean {
   const aBuf = Buffer.from(a)
@@ -111,6 +118,11 @@ function safeCompare(a: string, b: string): boolean {
   if (aBuf.length !== bBuf.length) return false
   return timingSafeEqual(aBuf, bBuf)
 }
+
+// ── Energy Session Store ───────────────────────────────────────────────────
+// Opaque tokens issued by POST /api/auth/energy; validated by requireEnergyAuth.
+// In-memory; tokens survive process lifetime (12 h expiry matches client sessionStorage).
+const energySessions = new Map<string, number>() // token → expiry ms
 
 // ── Ingestion ──────────────────────────────────────────────────────────────
 function ingestIssues(csvText: string, fileName: string) {
@@ -140,7 +152,7 @@ function ingestIssues(csvText: string, fileName: string) {
   })()
 
   stmts.logIngestion.run({
-    file_name: fileName,
+    file_name: hashFileName(fileName),
     table_name: 'issues',
     rows_added: rowsAdded,
     duplicates_skipped: duplicatesSkipped,
@@ -167,7 +179,7 @@ function ingestEnergy(
   })()
 
   stmts.logIngestion.run({
-    file_name: fileName,
+    file_name: hashFileName(fileName),
     table_name: table,
     rows_added: rowsAdded,
     duplicates_skipped: duplicatesSkipped,
@@ -221,12 +233,13 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB — realistic CSV ceiling
 })
+app.use(compression())
 app.use(express.json())
 
 // ── Auth Middleware ────────────────────────────────────────────────────────
-// Validates Bearer token on all /api/* routes.
-// Token = btoa(password) set by AuthGate after successful client-side login.
-// Server compares against its own VITE_PASSWORD env var (never sent to client).
+// Validates Basic auth on all /api/* routes.
+// Token = btoa('admin:' + password) set by AuthGate after successful client-side login.
+// Server compares the password portion against VITE_PASSWORD (never sent to client).
 function requireAuth(req: Request, res: Response, next: NextFunction): void {
   const expectedPassword = process.env.VITE_PASSWORD
   if (!expectedPassword) {
@@ -234,18 +247,21 @@ function requireAuth(req: Request, res: Response, next: NextFunction): void {
     return
   }
   const header = req.headers.authorization
-  if (!header?.startsWith('Bearer ')) {
+  if (!header?.startsWith('Basic ')) {
     res.status(401).json({ error: 'Unauthorized' })
     return
   }
   let decoded: string
   try {
-    decoded = Buffer.from(header.slice(7), 'base64').toString('utf-8')
+    decoded = Buffer.from(header.slice(6), 'base64').toString('utf-8')
   } catch {
     res.status(401).json({ error: 'Unauthorized' })
     return
   }
-  if (!safeCompare(decoded, expectedPassword)) {
+  // Format is "user:password" — take everything after the first colon.
+  const colonIdx = decoded.indexOf(':')
+  const password = colonIdx >= 0 ? decoded.slice(colonIdx + 1) : decoded
+  if (!safeCompare(password, expectedPassword)) {
     res.status(401).json({ error: 'Unauthorized' })
     return
   }
@@ -274,6 +290,44 @@ app.get('/health', (_req, res) => res.sendStatus(200))
 
 // Apply rate limiting and auth to all /api routes.
 app.use('/api', apiLimiter, requireAuth)
+
+// ── Energy Auth Middleware ─────────────────────────────────────────────────
+// Validates the opaque energy token issued by POST /api/auth/energy.
+// Applied to all /api/data/energy/* routes in addition to requireAuth.
+function requireEnergyAuth(req: Request, res: Response, next: NextFunction): void {
+  const token = req.headers['x-energy-token'] as string | undefined
+  if (!token) {
+    res.status(401).json({ error: 'Executive authorization required' })
+    return
+  }
+  const expiry = energySessions.get(token)
+  if (!expiry || Date.now() > expiry) {
+    energySessions.delete(token)
+    res.status(401).json({ error: 'Executive session expired' })
+    return
+  }
+  next()
+}
+
+// ── API: Energy auth ───────────────────────────────────────────────────────
+// Validates the executive energy password (separate from main password).
+// Returns an opaque short-lived token the client sends on energy data requests.
+// Sits behind the main requireAuth middleware so the caller must be logged in first.
+app.post('/api/auth/energy', (req: Request, res: Response) => {
+  const expectedPassword = process.env.VITE_ENERGY_PASSWORD
+  if (!expectedPassword) {
+    res.status(500).json({ error: 'Energy authentication is not configured.' })
+    return
+  }
+  const { password } = req.body as { password?: string }
+  if (!password || !safeCompare(password, expectedPassword)) {
+    res.status(401).json({ error: 'Unauthorized' })
+    return
+  }
+  const token = randomBytes(32).toString('hex')
+  energySessions.set(token, Date.now() + 12 * 60 * 60 * 1000)
+  res.json({ ok: true, token })
+})
 
 // ── API: Status ─────────────────────────────────────────────────────────────
 app.get('/api/status', (_req, res) => {
@@ -308,7 +362,7 @@ app.get('/api/data/issues', (_req, res) => {
 })
 
 // ── API: Get Energy ─────────────────────────────────────────────────────────
-app.get('/api/data/energy/average', (_req, res) => {
+app.get('/api/data/energy/average', requireEnergyAuth, (_req, res) => {
   const rows = stmts.getEnergyAvg.all() as any[]
   const result: EnergyRow[] = rows.map(r => ({ machine: r.machine, date: r.date, kWh: r.kwh }))
   const stat = stmts.statsEnergyAvg.get() as { n: number; last: string | null }
@@ -368,7 +422,9 @@ if (existsSync(distPath)) {
 // ── Start ──────────────────────────────────────────────────────────────────
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`[server] listening on port ${PORT}`)
-  console.log(`[server] database: ${DB_PATH}`)
+  if (process.env.NODE_ENV !== 'production') {
+    console.log(`[server] database: ${DB_PATH}`)
+  }
   if (!process.env.VITE_PASSWORD) {
     console.warn('[server] WARNING: VITE_PASSWORD is not set — all /api requests will return 500')
   }
