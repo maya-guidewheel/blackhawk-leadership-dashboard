@@ -105,3 +105,28 @@ export interface EnergyPlantSummary {
   machineCount: number
   avgCostPerMachine: number
 }
+
+export interface DowntimeEvent {
+  start_dt: Date
+  end_dt: Date
+  duration: number  // minutes
+  device: string
+  plant: string
+  status: string
+  calendar_date: string  // YYYY-MM-DD
+  week_start: string     // YYYY-MM-DD
+  shift: string          // '1st Shift' | '2nd Shift' | '3rd Shift'
+  tags: string           // raw tags string
+  is_tagged: boolean     // tags field is non-empty
+  is_planned: boolean    // tags include 'planned' (case-insensitive)
+  comments: string
+}
+
+export interface OEERecord {
+  machine: string
+  date: string     // YYYY-MM-DD
+  oee: number      // 0-100
+  availability: number | null
+  performance: number | null
+  quality: number | null
+}

@@ -11,6 +11,9 @@ import TrendView from './components/TrendView'
 import NeedsAttention from './components/NeedsAttention'
 import ExportButtons from './components/ExportButtons'
 import EnergyDashboard from './components/EnergyDashboard'
+import TaggingDashboard from './components/TaggingDashboard'
+import OEETrends from './components/OEETrends'
+import EnergyUptimeDashboard from './components/EnergyUptimeDashboard'
 import {
   overallStats,
   plantSummaries,
@@ -18,15 +21,17 @@ import {
   weeklyPlantSummaries,
   weeklyDeviceMatrix,
 } from './data/aggregations'
-import type { ColorChangeEvent, FilterState, EnergyRow } from './data/types'
+import type { ColorChangeEvent, FilterState, EnergyRow, DowntimeEvent, OEERecord } from './data/types'
 import { getCalendarDate } from './utils/dates'
 
-type Tab = 'changeover' | 'energy'
+type Tab = 'changeover' | 'tagging' | 'oee' | 'energy' | 'energy-uptime'
 
 interface DataStatus {
   issues: { count: number; lastUpdated: string | null }
   energy_average: { count: number; lastUpdated: string | null }
   energy_max: { count: number; lastUpdated: string | null }
+  downtime_events: { count: number; lastUpdated: string | null }
+  oee_data: { count: number; lastUpdated: string | null }
 }
 
 interface UploadFeedback {
@@ -61,6 +66,9 @@ function fmtTimestamp(iso: string | null): string {
 
 const TABS: { id: Tab; label: string; badge?: string }[] = [
   { id: 'changeover', label: 'Changeover' },
+  { id: 'tagging', label: 'Tagging & Downtime' },
+  { id: 'oee', label: 'OEE Trends' },
+  { id: 'energy-uptime', label: 'Energy vs Uptime' },
   { id: 'energy', label: 'Energy & Cost', badge: 'Executive' },
 ]
 
@@ -68,6 +76,9 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('changeover')
   const [allEvents, setAllEvents] = useState<ColorChangeEvent[]>([])
   const [avgEnergyRows, setAvgEnergyRows] = useState<EnergyRow[]>([])
+  const [downtimeEvents, setDowntimeEvents] = useState<DowntimeEvent[]>([])
+  const [oeeRecords, setOEERecords] = useState<OEERecord[]>([])
+  const [complianceTarget, setComplianceTarget] = useState(99.5)
   const [filters, setFilters] = useState<FilterState>(getDefaultFilters())
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -82,10 +93,12 @@ export default function App() {
     setLoading(true)
     setError('')
     try {
-      const [issuesRes, energyRes, statusRes] = await Promise.all([
+      const [issuesRes, energyRes, statusRes, downtimeRes, oeeRes] = await Promise.all([
         apiFetch('/api/data/issues'),
         apiFetch('/api/data/energy/average'), // 401 here is expected if not energy-authed
         apiFetch('/api/status'),
+        apiFetch('/api/data/downtime'),
+        apiFetch('/api/data/oee'),
       ])
 
       // 401 on issues or status means main auth is stale.
@@ -124,6 +137,23 @@ export default function App() {
         const energyData = await energyRes.json()
         setAvgEnergyRows(energyData.rows as EnergyRow[])
       }
+
+      // Load downtime events
+      if (downtimeRes.ok) {
+        const downtimeData = await downtimeRes.json()
+        const dEvents: DowntimeEvent[] = (downtimeData.events as any[]).map(e => ({
+          ...e,
+          start_dt: new Date(e.start_dt),
+          end_dt: new Date(e.end_dt),
+        }))
+        setDowntimeEvents(dEvents)
+      }
+
+      // Load OEE records
+      if (oeeRes.ok) {
+        const oeeData = await oeeRes.json()
+        setOEERecords(oeeData.records as OEERecord[])
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not reach the server.')
     } finally {
@@ -150,6 +180,8 @@ export default function App() {
     function onAuthExpired() {
       setAllEvents([])
       setAvgEnergyRows([])
+      setDowntimeEvents([])
+      setOEERecords([])
       setDataStatus(null)
       setError('')
       setLoading(true)
@@ -160,6 +192,25 @@ export default function App() {
   }, [])
 
   // ── Refresh helpers ────────────────────────────────────────────────────────
+  const refreshDowntime = useCallback(async () => {
+    const res = await apiFetch('/api/data/downtime')
+    if (!res.ok) return
+    const data = await res.json()
+    const dEvents: DowntimeEvent[] = (data.events as any[]).map(e => ({
+      ...e,
+      start_dt: new Date(e.start_dt),
+      end_dt: new Date(e.end_dt),
+    }))
+    setDowntimeEvents(dEvents)
+  }, [])
+
+  const refreshOEE = useCallback(async () => {
+    const res = await apiFetch('/api/data/oee')
+    if (!res.ok) return
+    const data = await res.json()
+    setOEERecords(data.records as OEERecord[])
+  }, [])
+
   const refreshIssues = useCallback(async () => {
     const res = await apiFetch('/api/data/issues')
     const data = await res.json()
@@ -173,7 +224,9 @@ export default function App() {
       const dates = events.map(e => e.calendar_date).sort()
       setFilters(f => ({ ...f, dateFrom: dates[0], dateTo: dates[dates.length - 1] }))
     }
-  }, [])
+    // Also refresh downtime since issues CSV also ingests downtime
+    await refreshDowntime()
+  }, [refreshDowntime])
 
   const refreshEnergy = useCallback(async () => {
     const res = await apiFetch('/api/data/energy/average')
@@ -204,6 +257,7 @@ export default function App() {
       setUploadFeedback(result)
       if (result.type === 'issues') await refreshIssues()
       else if (result.type === 'energy_average') await refreshEnergy()
+      else if (result.type === 'oee') await refreshOEE()
       await refreshStatus()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -231,13 +285,26 @@ export default function App() {
   const hasAnyData = allEvents.length > 0 || avgEnergyRows.length > 0
 
   // Last-updated text shown in header (context-aware)
-  const lastUpdatedText = activeTab === 'energy'
-    ? dataStatus?.energy_average.lastUpdated
-      ? `Energy updated ${fmtTimestamp(dataStatus.energy_average.lastUpdated)}`
-      : null
-    : dataStatus?.issues.lastUpdated
+  const lastUpdatedText = (() => {
+    if (activeTab === 'energy') {
+      return dataStatus?.energy_average.lastUpdated
+        ? `Energy updated ${fmtTimestamp(dataStatus.energy_average.lastUpdated)}`
+        : null
+    }
+    if (activeTab === 'tagging') {
+      return dataStatus?.downtime_events.lastUpdated
+        ? `Downtime updated ${fmtTimestamp(dataStatus.downtime_events.lastUpdated)} · ${(dataStatus.downtime_events.count ?? 0).toLocaleString()} events`
+        : null
+    }
+    if (activeTab === 'oee') {
+      return dataStatus?.oee_data.lastUpdated
+        ? `OEE updated ${fmtTimestamp(dataStatus.oee_data.lastUpdated)} · ${(dataStatus.oee_data.count ?? 0).toLocaleString()} records`
+        : null
+    }
+    return dataStatus?.issues.lastUpdated
       ? `Updated ${fmtTimestamp(dataStatus.issues.lastUpdated)} · ${(dataStatus?.issues.count ?? 0).toLocaleString()} records`
       : null
+  })()
 
   return (
     <AuthGate onLogin={loadAll}>
@@ -406,6 +473,25 @@ export default function App() {
                     </div>
                   )}
                 </>
+              )}
+
+              {/* ── Tagging & Downtime Tab ────────────────────────────────── */}
+              {activeTab === 'tagging' && (
+                <TaggingDashboard
+                  events={downtimeEvents}
+                  complianceTarget={complianceTarget}
+                  onTargetChange={setComplianceTarget}
+                />
+              )}
+
+              {/* ── OEE Trends Tab ────────────────────────────────────────── */}
+              {activeTab === 'oee' && (
+                <OEETrends records={oeeRecords} />
+              )}
+
+              {/* ── Energy vs Uptime Tab (no energy gate) ────────────────── */}
+              {activeTab === 'energy-uptime' && (
+                <EnergyUptimeDashboard energyRows={avgEnergyRows} downtimeEvents={downtimeEvents} />
               )}
 
               {/* ── Energy Tab (executive-gated) ──────────────────────────── */}

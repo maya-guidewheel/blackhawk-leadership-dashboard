@@ -7,7 +7,7 @@ import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import rateLimit from 'express-rate-limit'
 import compression from 'compression'
-import { parseCSV, parseEnergyCSV } from './src/data/parser'
+import { parseCSV, parseEnergyCSV, parseDowntimeCSV, parseOEECSV } from './src/data/parser'
 import type { ColorChangeEvent, EnergyRow } from './src/data/types'
 
 // ── Environment ────────────────────────────────────────────────────────────
@@ -64,6 +64,35 @@ db.exec(`
     duplicates_skipped INTEGER NOT NULL,
     ingested_at        TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS downtime_events (
+    row_hash      TEXT PRIMARY KEY,
+    start_dt      TEXT NOT NULL,
+    end_dt        TEXT NOT NULL,
+    duration      REAL NOT NULL,
+    device        TEXT NOT NULL,
+    plant         TEXT NOT NULL,
+    status        TEXT,
+    calendar_date TEXT NOT NULL,
+    week_start    TEXT NOT NULL,
+    shift         TEXT NOT NULL,
+    tags          TEXT,
+    is_tagged     INTEGER NOT NULL DEFAULT 0,
+    is_planned    INTEGER NOT NULL DEFAULT 0,
+    comments      TEXT,
+    ingested_at   TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  CREATE TABLE IF NOT EXISTS oee_data (
+    row_hash     TEXT PRIMARY KEY,
+    machine      TEXT NOT NULL,
+    date         TEXT NOT NULL,
+    oee          REAL NOT NULL,
+    availability REAL,
+    performance  REAL,
+    quality      REAL,
+    ingested_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `)
 
 // ── Schema Migrations ──────────────────────────────────────────────────────
@@ -93,11 +122,29 @@ const stmts = {
     INSERT INTO ingestion_log (file_name, table_name, rows_added, duplicates_skipped)
     VALUES (@file_name, @table_name, @rows_added, @duplicates_skipped)
   `),
+  insertDowntime: db.prepare(`
+    INSERT OR IGNORE INTO downtime_events
+      (row_hash, start_dt, end_dt, duration, device, plant, status,
+       calendar_date, week_start, shift, tags, is_tagged, is_planned, comments)
+    VALUES
+      (@row_hash, @start_dt, @end_dt, @duration, @device, @plant, @status,
+       @calendar_date, @week_start, @shift, @tags, @is_tagged, @is_planned, @comments)
+  `),
+  insertOEE: db.prepare(`
+    INSERT OR IGNORE INTO oee_data
+      (row_hash, machine, date, oee, availability, performance, quality)
+    VALUES
+      (@row_hash, @machine, @date, @oee, @availability, @performance, @quality)
+  `),
   getIssues: db.prepare('SELECT * FROM issues ORDER BY calendar_date, device'),
   getEnergyAvg: db.prepare('SELECT machine, date, kwh FROM energy_average ORDER BY machine, date'),
+  getDowntime: db.prepare('SELECT * FROM downtime_events ORDER BY calendar_date, device'),
+  getOEE: db.prepare('SELECT * FROM oee_data ORDER BY machine, date'),
   statsIssues: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM issues'),
   statsEnergyAvg: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM energy_average'),
   statsEnergyMax: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM energy_max'),
+  statsDowntime: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM downtime_events'),
+  statsOEE: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM oee_data'),
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -157,7 +204,78 @@ function ingestIssues(csvText: string, fileName: string) {
     rows_added: rowsAdded,
     duplicates_skipped: duplicatesSkipped,
   })
+
+  // Also ingest all downtime events from the same CSV
+  const downtimeResult = ingestDowntime(csvText, fileName)
+
+  return { rowsAdded, duplicatesSkipped, total: events.length, downtime: downtimeResult }
+}
+
+function ingestDowntime(csvText: string, fileName: string) {
+  const events = parseDowntimeCSV(csvText)
+  let rowsAdded = 0
+  let duplicatesSkipped = 0
+
+  db.transaction(() => {
+    for (const e of events) {
+      const hash = rowHash(`${e.start_dt.toISOString()}|${e.device}`)
+      const r = stmts.insertDowntime.run({
+        row_hash: hash,
+        start_dt: e.start_dt.toISOString(),
+        end_dt: e.end_dt.toISOString(),
+        duration: e.duration,
+        device: e.device,
+        plant: e.plant,
+        status: e.status,
+        calendar_date: e.calendar_date,
+        week_start: e.week_start,
+        shift: e.shift,
+        tags: e.tags,
+        is_tagged: e.is_tagged ? 1 : 0,
+        is_planned: e.is_planned ? 1 : 0,
+        comments: e.comments,
+      })
+      r.changes > 0 ? rowsAdded++ : duplicatesSkipped++
+    }
+  })()
+
+  stmts.logIngestion.run({
+    file_name: hashFileName(fileName),
+    table_name: 'downtime_events',
+    rows_added: rowsAdded,
+    duplicates_skipped: duplicatesSkipped,
+  })
   return { rowsAdded, duplicatesSkipped, total: events.length }
+}
+
+function ingestOEE(csvText: string, fileName: string) {
+  const records = parseOEECSV(csvText)
+  let rowsAdded = 0
+  let duplicatesSkipped = 0
+
+  db.transaction(() => {
+    for (const rec of records) {
+      const hash = rowHash(`${rec.machine}|${rec.date}`)
+      const r = stmts.insertOEE.run({
+        row_hash: hash,
+        machine: rec.machine,
+        date: rec.date,
+        oee: rec.oee,
+        availability: rec.availability,
+        performance: rec.performance,
+        quality: rec.quality,
+      })
+      r.changes > 0 ? rowsAdded++ : duplicatesSkipped++
+    }
+  })()
+
+  stmts.logIngestion.run({
+    file_name: hashFileName(fileName),
+    table_name: 'oee_data',
+    rows_added: rowsAdded,
+    duplicates_skipped: duplicatesSkipped,
+  })
+  return { rowsAdded, duplicatesSkipped, total: records.length }
 }
 
 function ingestEnergy(
@@ -217,6 +335,7 @@ function runBackfill() {
     } catch (err) {
       console.error(`[backfill]   ERROR on ${src.rel}:`, err)
     }
+
   }
   console.log('[backfill] done.')
 }
@@ -334,10 +453,14 @@ app.get('/api/status', (_req, res) => {
   const issues = stmts.statsIssues.get() as { n: number; last: string | null }
   const avg = stmts.statsEnergyAvg.get() as { n: number; last: string | null }
   const max = stmts.statsEnergyMax.get() as { n: number; last: string | null }
+  const downtime = stmts.statsDowntime.get() as { n: number; last: string | null }
+  const oee = stmts.statsOEE.get() as { n: number; last: string | null }
   res.json({
     issues: { count: issues.n, lastUpdated: issues.last },
     energy_average: { count: avg.n, lastUpdated: avg.last },
     energy_max: { count: max.n, lastUpdated: max.last },
+    downtime_events: { count: downtime.n, lastUpdated: downtime.last },
+    oee_data: { count: oee.n, lastUpdated: oee.last },
   })
 })
 
@@ -369,6 +492,43 @@ app.get('/api/data/energy/average', requireEnergyAuth, (_req, res) => {
   res.json({ rows: result, total: result.length, lastUpdated: stat.last })
 })
 
+// ── API: Get Downtime Events ─────────────────────────────────────────────────
+app.get('/api/data/downtime', (_req, res) => {
+  const rows = stmts.getDowntime.all() as any[]
+  const events = rows.map(r => ({
+    start_dt: r.start_dt,
+    end_dt: r.end_dt,
+    duration: r.duration,
+    device: r.device,
+    plant: r.plant,
+    status: r.status || '',
+    calendar_date: r.calendar_date,
+    week_start: r.week_start,
+    shift: r.shift,
+    tags: r.tags || '',
+    is_tagged: r.is_tagged === 1,
+    is_planned: r.is_planned === 1,
+    comments: r.comments || '',
+  }))
+  const stat = stmts.statsDowntime.get() as { n: number; last: string | null }
+  res.json({ events, total: events.length, lastUpdated: stat.last })
+})
+
+// ── API: Get OEE Data ────────────────────────────────────────────────────────
+app.get('/api/data/oee', (_req, res) => {
+  const rows = stmts.getOEE.all() as any[]
+  const records = rows.map(r => ({
+    machine: r.machine,
+    date: r.date,
+    oee: r.oee,
+    availability: r.availability,
+    performance: r.performance,
+    quality: r.quality,
+  }))
+  const stat = stmts.statsOEE.get() as { n: number; last: string | null }
+  res.json({ records, total: records.length, lastUpdated: stat.last })
+})
+
 // ── API: Upload ─────────────────────────────────────────────────────────────
 app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res: Response) => {
   if (!req.file) {
@@ -381,9 +541,11 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
   const typeHint = (req.body?.type as string | undefined) || ''
 
   const cleanFirst = csvText.replace(/^﻿/, '').split('\n')[0].toLowerCase()
-  let type: 'issues' | 'energy_average' | 'energy_max'
+  let type: 'issues' | 'energy_average' | 'energy_max' | 'oee'
 
-  if (typeHint === 'energy_max' || fileName.toLowerCase().includes('max')) {
+  if (typeHint === 'oee' || cleanFirst.includes('oee') || fileName.toLowerCase().includes('oee')) {
+    type = 'oee'
+  } else if (typeHint === 'energy_max' || fileName.toLowerCase().includes('max')) {
     type = 'energy_max'
   } else if (
     typeHint === 'energy_average' ||
@@ -398,10 +560,14 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
   }
 
   try {
-    const result =
-      type === 'issues'
-        ? ingestIssues(csvText, fileName)
-        : ingestEnergy(csvText, fileName, type)
+    let result: Record<string, unknown>
+    if (type === 'oee') {
+      result = ingestOEE(csvText, fileName)
+    } else if (type === 'issues') {
+      result = ingestIssues(csvText, fileName)
+    } else {
+      result = ingestEnergy(csvText, fileName, type)
+    }
     res.json({ ...result, type, fileName })
   } catch (err: unknown) {
     // Log full error server-side; return generic message to client.
