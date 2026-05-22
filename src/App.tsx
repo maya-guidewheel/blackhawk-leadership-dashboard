@@ -338,7 +338,7 @@ export default function App() {
 
         {/* ── Header ─────────────────────────────────────────────────────── */}
         <header className="bg-card border-b border-border">
-          <div className="max-w-dashboard mx-auto px-6">
+          <div className="px-6">
             <PageHeader
               title="Leadership Dashboard"
               subtitle="Powered by Guidewheel"
@@ -367,7 +367,7 @@ export default function App() {
           </div>
 
           {/* Tab bar */}
-          <div className="max-w-dashboard mx-auto px-6 flex items-end gap-1 border-t border-border-muted">
+          <div className="px-6 flex items-end gap-1 border-t border-border-muted">
             {TABS.map(tab => {
               const isActive = activeTab === tab.id
               return (
@@ -398,7 +398,7 @@ export default function App() {
 
         {/* ── Upload feedback banner ──────────────────────────────────────── */}
         {uploadFeedback && (
-          <div className="max-w-dashboard mx-auto px-4 sm:px-6 mt-3">
+          <div className="px-4 sm:px-6 mt-3">
             <div
               className={`rounded-md border px-4 py-3 text-sm ${
                 uploadFeedback.rowsAdded > 0
@@ -458,7 +458,7 @@ export default function App() {
         )}
 
         {/* ── Main content ────────────────────────────────────────────────── */}
-        <main className="max-w-dashboard mx-auto px-4 sm:px-6 py-7">
+        <main className="px-4 sm:px-6 py-7">
           {loading ? (
             <div className="text-center py-20 text-muted-foreground">Loading data…</div>
           ) : !hasAnyData && !loading ? (

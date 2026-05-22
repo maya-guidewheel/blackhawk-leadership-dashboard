@@ -8,11 +8,4 @@ export default {
     './src/**/*.{js,ts,jsx,tsx}',
     './node_modules/@safigen/fd-gw-ui/dist/**/*.{js,cjs,mjs}',
   ],
-  theme: {
-    extend: {
-      maxWidth: {
-        dashboard: '1300px',
-      },
-    },
-  },
 }

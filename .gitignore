@@ -38,3 +38,7 @@ deno.lock
 .DS_Store
 Thumbs.db
 *.local
+
+# Playwright MCP traces and ad-hoc screenshots
+.playwright-mcp/
+*.png
