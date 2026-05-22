@@ -34,11 +34,19 @@ interface DataStatus {
   oee_data: { count: number; lastUpdated: string | null }
 }
 
+interface OEEDiagnostics {
+  format: string
+  headersFound: string[]
+  rowsRead: number
+  sampleIssues: string[]
+}
+
 interface UploadFeedback {
   fileName: string
   type: string
   rowsAdded: number
   duplicatesSkipped: number
+  diagnostics?: OEEDiagnostics
 }
 
 function getDefaultFilters(): FilterState {
@@ -76,6 +84,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<Tab>('changeover')
   const [allEvents, setAllEvents] = useState<ColorChangeEvent[]>([])
   const [avgEnergyRows, setAvgEnergyRows] = useState<EnergyRow[]>([])
+  const [energyUsageRows, setEnergyUsageRows] = useState<EnergyRow[]>([])
   const [downtimeEvents, setDowntimeEvents] = useState<DowntimeEvent[]>([])
   const [oeeRecords, setOEERecords] = useState<OEERecord[]>([])
   const [complianceTarget, setComplianceTarget] = useState(99.5)
@@ -93,16 +102,17 @@ export default function App() {
     setLoading(true)
     setError('')
     try {
-      const [issuesRes, energyRes, statusRes, downtimeRes, oeeRes] = await Promise.all([
+      const [issuesRes, energyRes, energyUsageRes, statusRes, downtimeRes, oeeRes] = await Promise.all([
         apiFetch('/api/data/issues'),
         apiFetch('/api/data/energy/average'), // 401 here is expected if not energy-authed
+        apiFetch('/api/data/energy/usage'),   // non-gated; used by Energy vs Uptime tab
         apiFetch('/api/status'),
         apiFetch('/api/data/downtime'),
         apiFetch('/api/data/oee'),
       ])
 
       // 401 on issues or status means main auth is stale.
-      // Energy 401 is acceptable — user hasn't passed EnergyGate yet.
+      // Energy average 401 is acceptable — user hasn't passed EnergyGate yet.
       if (issuesRes.status === 401 || statusRes.status === 401) {
         setLoading(false)
         return
@@ -115,7 +125,7 @@ export default function App() {
 
       const [issuesData, statusData] = await Promise.all([
         issuesRes.json(),
-        statusRes.json(),
+        statusRes.json() as Promise<DataStatus>,
       ])
 
       const events: ColorChangeEvent[] = (issuesData.events as any[]).map(e => ({
@@ -136,6 +146,12 @@ export default function App() {
       if (energyRes.ok) {
         const energyData = await energyRes.json()
         setAvgEnergyRows(energyData.rows as EnergyRow[])
+      }
+
+      // Non-gated energy usage (kWh without cost data) — always load if main auth passes.
+      if (energyUsageRes.ok) {
+        const usageData = await energyUsageRes.json()
+        setEnergyUsageRows(usageData.rows as EnergyRow[])
       }
 
       // Load downtime events
@@ -180,6 +196,7 @@ export default function App() {
     function onAuthExpired() {
       setAllEvents([])
       setAvgEnergyRows([])
+      setEnergyUsageRows([])
       setDowntimeEvents([])
       setOEERecords([])
       setDataStatus(null)
@@ -235,6 +252,13 @@ export default function App() {
     setAvgEnergyRows(data.rows as EnergyRow[])
   }, [])
 
+  const refreshEnergyUsage = useCallback(async () => {
+    const res = await apiFetch('/api/data/energy/usage')
+    if (!res.ok) return
+    const data = await res.json()
+    setEnergyUsageRows(data.rows as EnergyRow[])
+  }, [])
+
   const refreshStatus = useCallback(async () => {
     const res = await apiFetch('/api/status')
     setDataStatus(await res.json())
@@ -256,8 +280,9 @@ export default function App() {
       const result = await res.json() as UploadFeedback
       setUploadFeedback(result)
       if (result.type === 'issues') await refreshIssues()
-      else if (result.type === 'energy_average') await refreshEnergy()
-      else if (result.type === 'oee') await refreshOEE()
+      else if (result.type === 'energy_average') {
+        await Promise.all([refreshEnergy(), refreshEnergyUsage()])
+      } else if (result.type === 'oee') await refreshOEE()
       await refreshStatus()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -265,7 +290,7 @@ export default function App() {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [refreshIssues, refreshEnergy, refreshStatus])
+  }, [refreshIssues, refreshEnergy, refreshEnergyUsage, refreshStatus])
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const filtered = useMemo(() => allEvents.filter(e => {
@@ -282,7 +307,7 @@ export default function App() {
   const weeklyPlantData = useMemo(() => weeklyPlantSummaries(filtered), [filtered])
   const heatmapData = useMemo(() => weeklyDeviceMatrix(filtered), [filtered])
 
-  const hasAnyData = allEvents.length > 0 || avgEnergyRows.length > 0
+  const hasAnyData = allEvents.length > 0 || avgEnergyRows.length > 0 || energyUsageRows.length > 0
 
   // Last-updated text shown in header (context-aware)
   const lastUpdatedText = (() => {
@@ -398,27 +423,52 @@ export default function App() {
         {uploadFeedback && (
           <div className="max-w-dashboard mx-auto px-4 sm:px-6 mt-3">
             <div
-              className="flex items-center justify-between rounded-lg px-4 py-3 text-sm"
+              className="rounded-lg px-4 py-3 text-sm"
               style={{
                 background: uploadFeedback.rowsAdded > 0 ? '#f0fdf4' : '#fffbeb',
                 border: `1px solid ${uploadFeedback.rowsAdded > 0 ? '#bbf7d0' : '#fde68a'}`,
                 color: uploadFeedback.rowsAdded > 0 ? '#166534' : '#92400e',
               }}
             >
-              <div>
-                <span className="font-semibold">{uploadFeedback.fileName}</span>
-                {' — '}
-                <span className="font-bold">
-                  {uploadFeedback.rowsAdded.toLocaleString()} records added
-                </span>
-                {uploadFeedback.duplicatesSkipped > 0 && (
-                  <span className="opacity-70">
-                    , {uploadFeedback.duplicatesSkipped.toLocaleString()} duplicates skipped
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="font-semibold">{uploadFeedback.fileName}</span>
+                  {' — '}
+                  <span className="font-bold">
+                    {uploadFeedback.rowsAdded.toLocaleString()} records added
                   </span>
-                )}
-                <span className="ml-2 text-xs opacity-60">({uploadFeedback.type.replace('_', ' ')})</span>
+                  {uploadFeedback.duplicatesSkipped > 0 && (
+                    <span className="opacity-70">
+                      , {uploadFeedback.duplicatesSkipped.toLocaleString()} duplicates skipped
+                    </span>
+                  )}
+                  <span className="ml-2 text-xs opacity-60">({uploadFeedback.type.replace(/_/g, ' ')})</span>
+                </div>
+                <button onClick={() => setUploadFeedback(null)} className="ml-4 opacity-50 hover:opacity-100 font-bold text-lg leading-none shrink-0">×</button>
               </div>
-              <button onClick={() => setUploadFeedback(null)} className="ml-4 opacity-50 hover:opacity-100 font-bold text-lg leading-none">×</button>
+              {uploadFeedback.rowsAdded === 0 && uploadFeedback.type === 'oee' && uploadFeedback.diagnostics && (
+                <div className="mt-2 text-xs space-y-1 opacity-80">
+                  <div><span className="font-semibold">Detected format:</span> {uploadFeedback.diagnostics.format} ({uploadFeedback.diagnostics.rowsRead} rows read)</div>
+                  <div>
+                    <span className="font-semibold">Columns found:</span>{' '}
+                    {uploadFeedback.diagnostics.headersFound.length > 0
+                      ? uploadFeedback.diagnostics.headersFound.join(', ')
+                      : '(none detected)'}
+                  </div>
+                  {uploadFeedback.diagnostics.format === 'production' && (
+                    <div><span className="font-semibold">Expected columns:</span> Device, Scheduled Time, OEE</div>
+                  )}
+                  {uploadFeedback.diagnostics.format === 'simple' && (
+                    <div><span className="font-semibold">Expected columns:</span> Machine, Date, OEE</div>
+                  )}
+                  {uploadFeedback.diagnostics.sampleIssues.length > 0 && (
+                    <div>
+                      <span className="font-semibold">Parse issues:</span>{' '}
+                      {uploadFeedback.diagnostics.sampleIssues.join(' · ')}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -491,7 +541,7 @@ export default function App() {
 
               {/* ── Energy vs Uptime Tab (no energy gate) ────────────────── */}
               {activeTab === 'energy-uptime' && (
-                <EnergyUptimeDashboard energyRows={avgEnergyRows} downtimeEvents={downtimeEvents} />
+                <EnergyUptimeDashboard energyRows={energyUsageRows} downtimeEvents={downtimeEvents} />
               )}
 
               {/* ── Energy Tab (executive-gated) ──────────────────────────── */}

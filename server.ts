@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url'
 import rateLimit from 'express-rate-limit'
 import compression from 'compression'
 import { parseCSV, parseEnergyCSV, parseDowntimeCSV, parseOEECSV } from './src/data/parser'
+import type { OEEDiagnostics } from './src/data/parser'
 import type { ColorChangeEvent, EnergyRow } from './src/data/types'
 
 // ── Environment ────────────────────────────────────────────────────────────
@@ -249,7 +250,7 @@ function ingestDowntime(csvText: string, fileName: string) {
 }
 
 function ingestOEE(csvText: string, fileName: string) {
-  const records = parseOEECSV(csvText)
+  const { records, diagnostics } = parseOEECSV(csvText)
   let rowsAdded = 0
   let duplicatesSkipped = 0
 
@@ -277,7 +278,7 @@ function ingestOEE(csvText: string, fileName: string) {
     rows_added: rowsAdded,
     duplicates_skipped: duplicatesSkipped,
   })
-  return { rowsAdded, duplicatesSkipped, total: records.length }
+  return { rowsAdded, duplicatesSkipped, total: records.length, diagnostics }
 }
 
 function ingestEnergy(
@@ -343,6 +344,40 @@ function runBackfill() {
 }
 
 runBackfill()
+
+// ── Downtime Backfill ──────────────────────────────────────────────────────
+// Populate downtime_events from historical issues rows so Tagging & Downtime
+// shows the same history as the Changeover tab without requiring a re-upload.
+// Uses INSERT OR IGNORE so it is safe to run on every startup.
+// shift is derived from start_dt hour (UTC, consistent with live ingestion path).
+// is_tagged is stored as 0 but gets re-derived by isEffectivelyTaggedServer on read.
+function runDowntimeBackfill() {
+  const result = db.prepare(`
+    INSERT OR IGNORE INTO downtime_events
+      (row_hash, start_dt, end_dt, duration, device, plant, status,
+       calendar_date, week_start, shift, tags, is_tagged, is_planned, comments)
+    SELECT
+      row_hash, start_dt, end_dt, duration, device, plant, status,
+      calendar_date, week_start,
+      CASE
+        WHEN CAST(strftime('%H', start_dt) AS INTEGER) >= 6
+         AND CAST(strftime('%H', start_dt) AS INTEGER) < 14 THEN '1st Shift'
+        WHEN CAST(strftime('%H', start_dt) AS INTEGER) >= 14
+         AND CAST(strftime('%H', start_dt) AS INTEGER) < 22 THEN '2nd Shift'
+        ELSE '3rd Shift'
+      END,
+      tags,
+      0,
+      CASE WHEN LOWER(COALESCE(tags, '')) LIKE '%planned%' THEN 1 ELSE 0 END,
+      comments
+    FROM issues
+  `).run()
+  if (result.changes > 0) {
+    console.log(`[downtime-backfill] migrated ${result.changes} rows from issues → downtime_events`)
+  }
+}
+
+runDowntimeBackfill()
 
 // ── Express App ────────────────────────────────────────────────────────────
 const app = express()
@@ -494,6 +529,16 @@ app.get('/api/data/energy/average', requireEnergyAuth, (_req, res) => {
   res.json({ rows: result, total: result.length, lastUpdated: stat.last })
 })
 
+// Non-gated energy endpoint for Energy vs Uptime tab (kWh only, no cost data).
+// Requires main auth but NOT executive energy auth — the tab shows efficiency
+// metrics (kWh/runtime hour) which contain no pricing or cost information.
+app.get('/api/data/energy/usage', (_req, res) => {
+  const rows = stmts.getEnergyAvg.all() as any[]
+  const result: EnergyRow[] = rows.map(r => ({ machine: r.machine, date: r.date, kWh: r.kwh }))
+  const stat = stmts.statsEnergyAvg.get() as { n: number; last: string | null }
+  res.json({ rows: result, total: result.length, lastUpdated: stat.last })
+})
+
 // Re-derive is_tagged from the tags string so existing rows with "No Tag" etc.
 // are corrected without requiring a DB migration.
 const UNTAGGED_SERVER = new Set([
@@ -557,26 +602,35 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
   const fileName = req.file.originalname
   const typeHint = (req.body?.type as string | undefined) || ''
 
-  const cleanFirst = csvText.replace(/^﻿/, '').split('\n')[0].toLowerCase()
+  // Content-first type detection to prevent filename-based misrouting.
+  // Energy CSVs use semicolons as delimiters — check data lines before filename.
+  const csvLines = csvText.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim())
+  const firstHeaderLine = (csvLines[0] || '').toLowerCase()
+  const firstDataLine = csvLines.length > 1 ? csvLines[1] : ''
+  const isSemicolonDelimited = (firstDataLine.match(/;/g) || []).length >= 2
+  const lowerName = fileName.toLowerCase()
+
   let type: 'issues' | 'energy_average' | 'energy_max' | 'oee'
 
-  const lowerName = fileName.toLowerCase()
-  if (
-    typeHint === 'oee' ||
-    cleanFirst.includes('oee') ||
-    lowerName.includes('oee') ||
-    lowerName.includes('production')
+  if (typeHint === 'oee') {
+    type = 'oee'
+  } else if (typeHint === 'energy_max') {
+    type = 'energy_max'
+  } else if (typeHint === 'energy_average' || typeHint === 'energy') {
+    type = 'energy_average'
+  } else if (isSemicolonDelimited || firstHeaderLine.includes('energy kwh')) {
+    // Semicolon-delimited = energy format; max vs average via filename
+    type = lowerName.includes('max') ? 'energy_max' : 'energy_average'
+  } else if (
+    firstHeaderLine.includes('oee') ||
+    (firstHeaderLine.includes('device') && firstHeaderLine.includes('production'))
   ) {
     type = 'oee'
-  } else if (typeHint === 'energy_max' || lowerName.includes('max')) {
+  } else if (lowerName.includes('oee') || lowerName.includes('production')) {
+    type = 'oee'
+  } else if (lowerName.includes('max')) {
     type = 'energy_max'
-  } else if (
-    typeHint === 'energy_average' ||
-    typeHint === 'energy' ||
-    cleanFirst.includes('energy kwh') ||
-    lowerName.includes('average') ||
-    lowerName.includes('energy')
-  ) {
+  } else if (lowerName.includes('energy') || lowerName.includes('average')) {
     type = 'energy_average'
   } else {
     type = 'issues'

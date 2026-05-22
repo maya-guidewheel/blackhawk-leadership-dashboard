@@ -2,6 +2,13 @@ import Papa from 'papaparse'
 import type { RawRow, ColorChangeEvent, EnergyRow, DowntimeEvent, OEERecord } from './types'
 import { parseTimestamp, getCalendarDate, getWeekStart } from '../utils/dates'
 
+export interface OEEDiagnostics {
+  format: 'production' | 'simple' | 'unknown'
+  headersFound: string[]
+  rowsRead: number
+  sampleIssues: string[]
+}
+
 const CHANGEOVER_TAG = 'change-color/foam/label'
 
 // Tag values that are semantically equivalent to "no tag" — these should NOT
@@ -232,16 +239,25 @@ function isProductionFormat(headerRow: Record<string, string>): boolean {
   )
 }
 
-function parseSimpleOEERows(rows: Record<string, string>[]): OEERecord[] {
+function parseSimpleOEERows(rows: Record<string, string>[], sampleIssues: string[]): OEERecord[] {
   const records: OEERecord[] = []
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
     const getCol = makeGetCol(row)
     const machine = getCol('machine')
     const date = getCol('date')
     const oeeStr = getCol('oee')
-    if (!machine || !date || !oeeStr) continue
+    if (!machine || !date || !oeeStr) {
+      if (sampleIssues.length < 3)
+        sampleIssues.push(`Row ${i + 2}: missing ${!machine ? '"machine"' : !date ? '"date"' : '"oee"'} column value`)
+      continue
+    }
     const oee = parseOEEValue(oeeStr)
-    if (oee === null) continue
+    if (oee === null) {
+      if (sampleIssues.length < 3)
+        sampleIssues.push(`Row ${i + 2}: invalid OEE value "${oeeStr}"`)
+      continue
+    }
     const avail = parseFloat(getCol('availability')) || null
     const perf = parseFloat(getCol('performance')) || null
     const qual = parseFloat(getCol('quality')) || null
@@ -250,24 +266,38 @@ function parseSimpleOEERows(rows: Record<string, string>[]): OEERecord[] {
   return records
 }
 
-function parseProductionRows(rows: Record<string, string>[]): OEERecord[] {
+function parseProductionRows(rows: Record<string, string>[], sampleIssues: string[]): OEERecord[] {
   const records: OEERecord[] = []
   const year = new Date().getFullYear()
-  for (const row of rows) {
+  for (let i = 0; i < rows.length; i++) {
+    const row = rows[i]
     const getCol = makeGetCol(row)
     const device = getCol('device', 'machine')
-    if (!device) continue
+    if (!device) {
+      if (sampleIssues.length < 3) sampleIssues.push(`Row ${i + 2}: missing device/machine value`)
+      continue
+    }
     const scheduledTime = getCol('scheduled time', 'scheduled', 'time range')
     const date = parseScheduledDate(scheduledTime || '', year)
-    if (!date) continue
+    if (!date) {
+      if (sampleIssues.length < 3)
+        sampleIssues.push(`Row ${i + 2}: could not parse date from scheduled time "${scheduledTime}"`)
+      continue
+    }
     const oeeStr = getCol('oee')
-    if (!oeeStr) continue
+    if (!oeeStr) {
+      if (sampleIssues.length < 3) sampleIssues.push(`Row ${i + 2}: missing OEE value`)
+      continue
+    }
     const oee = parseOEEValue(oeeStr)
-    if (oee === null) continue
+    if (oee === null) {
+      if (sampleIssues.length < 3)
+        sampleIssues.push(`Row ${i + 2}: invalid OEE value "${oeeStr}"`)
+      continue
+    }
     const product = getCol('product')
     const batch = getCol('batch')
     const prodQty = getCol('production qty', 'production quantity', 'qty')
-    // Build a stable dedup key for multi-session-per-day rows
     const session_key = `${device}|${scheduledTime}|${product}|${batch}|${prodQty}|${oeeStr}`
     records.push({
       machine: device,
@@ -282,15 +312,33 @@ function parseProductionRows(rows: Record<string, string>[]): OEERecord[] {
   return records
 }
 
-export function parseOEECSV(csvText: string): OEERecord[] {
+export function parseOEECSV(csvText: string): { records: OEERecord[]; diagnostics: OEEDiagnostics } {
   const result = Papa.parse<Record<string, string>>(csvText, {
     header: true,
     skipEmptyLines: true,
     dynamicTyping: false,
   })
-  if (result.data.length === 0) return []
-  if (isProductionFormat(result.data[0])) {
-    return parseProductionRows(result.data)
+  const headersFound = (result.meta.fields || []).map(h => h.trim())
+  const rowsRead = result.data.length
+
+  if (rowsRead === 0) {
+    return {
+      records: [],
+      diagnostics: { format: 'unknown', headersFound, rowsRead, sampleIssues: ['No data rows found in CSV'] },
+    }
   }
-  return parseSimpleOEERows(result.data)
+
+  const sampleIssues: string[] = []
+  let format: 'production' | 'simple'
+  let records: OEERecord[]
+
+  if (isProductionFormat(result.data[0])) {
+    format = 'production'
+    records = parseProductionRows(result.data, sampleIssues)
+  } else {
+    format = 'simple'
+    records = parseSimpleOEERows(result.data, sampleIssues)
+  }
+
+  return { records, diagnostics: { format, headersFound, rowsRead, sampleIssues } }
 }
