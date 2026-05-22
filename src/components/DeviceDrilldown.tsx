@@ -1,58 +1,68 @@
-import { useState } from 'react'
-import type { DeviceSummary, WeeklyDeviceCell, ColorChangeEvent } from '../data/types'
-import { formatShortDate } from '../utils/dates'
-import { trackEvent } from '../analytics/posthog'
-import DrilldownPanel from './DrilldownPanel'
+import { useState } from "react";
+import type {
+  DeviceSummary,
+  WeeklyDeviceCell,
+  ColorChangeEvent,
+} from "../data/types";
+import { formatShortDate, formatDuration } from "../utils/dates";
+import { trackEvent } from "../analytics/posthog";
+import DrilldownPanel from "./DrilldownPanel";
 
 interface Props {
-  deviceData: DeviceSummary[]
-  heatmapData: WeeklyDeviceCell[]
-  events: ColorChangeEvent[]
-  threshold: number
+  deviceData: DeviceSummary[];
+  heatmapData: WeeklyDeviceCell[];
+  events: ColorChangeEvent[];
+  threshold: number;
 }
 
-type MetricKey = 'avg' | 'total' | 'count'
-
-function r(n: number): string {
-  return (Math.round(n * 10) / 10).toLocaleString()
-}
+type MetricKey = "avg" | "total" | "count";
 
 function getCellColor(value: number, max: number): string {
-  if (max === 0) return 'bg-slate-50'
-  const ratio = value / max
-  if (ratio > 0.8) return 'bg-red-400 text-white'
-  if (ratio > 0.6) return 'bg-orange-300'
-  if (ratio > 0.4) return 'bg-yellow-200'
-  if (ratio > 0.2) return 'bg-green-200'
-  return 'bg-green-100'
+  if (max === 0) return "bg-slate-50";
+  const ratio = value / max;
+  if (ratio > 0.8) return "bg-red-400 text-white";
+  if (ratio > 0.6) return "bg-orange-300";
+  if (ratio > 0.4) return "bg-yellow-200";
+  if (ratio > 0.2) return "bg-green-200";
+  return "bg-green-100";
 }
 
 function dotColor(p90: number, threshold: number): string {
-  if (p90 <= threshold) return 'text-success'
-  if (p90 <= threshold * 1.25) return 'text-warning'
-  return 'text-danger'
+  if (p90 <= threshold) return "text-success";
+  if (p90 <= threshold * 1.25) return "text-warning";
+  return "text-danger";
 }
 
-export default function DeviceDrilldown({ deviceData, heatmapData, events, threshold }: Props) {
-  const [metric, setMetric] = useState<MetricKey>('avg')
-  const [drillDevice, setDrillDevice] = useState<string | null>(null)
+export default function DeviceDrilldown({
+  deviceData,
+  heatmapData,
+  events,
+  threshold,
+}: Props) {
+  const [metric, setMetric] = useState<MetricKey>("avg");
+  const [drillDevice, setDrillDevice] = useState<string | null>(null);
 
-  if (deviceData.length === 0) return null
+  if (deviceData.length === 0) return null;
 
-  const devices = [...new Set(heatmapData.map(d => d.device))].sort()
-  const weeks = [...new Set(heatmapData.map(d => d.week_start))].sort()
-  const cellMap = new Map(heatmapData.map(d => [`${d.device}||${d.week_start}`, d]))
-  const allValues = heatmapData.map(d => d[metric])
-  const maxVal = allValues.length > 0 ? Math.max(...allValues) : 0
+  const devices = [...new Set(heatmapData.map((d) => d.device))].sort();
+  const weeks = [...new Set(heatmapData.map((d) => d.week_start))].sort();
+  const cellMap = new Map(
+    heatmapData.map((d) => [`${d.device}||${d.week_start}`, d]),
+  );
+  const allValues = heatmapData.map((d) => d[metric]);
+  const maxVal = allValues.length > 0 ? Math.max(...allValues) : 0;
 
   function openDeviceDrilldown(device: string) {
-    trackEvent('drilldown_device', { device })
-    setDrillDevice(device)
+    trackEvent("drilldown_device", { device });
+    setDrillDevice(device);
   }
 
-  const baseBtnCls = 'px-2.5 py-1 text-xs rounded font-medium transition-colors border'
-  const activeBtnCls = 'bg-btn-primary text-btn-primary-foreground border-btn-primary'
-  const inactiveBtnCls = 'bg-background-accent text-muted-foreground border-border'
+  const baseBtnCls =
+    "px-2.5 py-1 text-xs rounded font-medium transition-colors border";
+  const activeBtnCls =
+    "bg-btn-primary text-btn-primary-foreground border-btn-primary";
+  const inactiveBtnCls =
+    "bg-background-accent text-muted-foreground border-border";
 
   return (
     <section className="mb-8">
@@ -75,7 +85,7 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
               </tr>
             </thead>
             <tbody>
-              {deviceData.map(d => {
+              {deviceData.map((d) => {
                 return (
                   <tr
                     key={d.device}
@@ -83,18 +93,20 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
                     onClick={() => openDeviceDrilldown(d.device)}
                   >
                     <td className="font-mono text-xs font-semibold">
-                      <span className={`mr-2 ${dotColor(d.p90, threshold)}`}>●</span>
+                      <span className={`mr-2 ${dotColor(d.p90, threshold)}`}>
+                        ●
+                      </span>
                       {d.device}
                     </td>
                     <td>{d.plant}</td>
                     <td className="text-right">{d.count}</td>
-                    <td className="text-right">{r(d.avg)}</td>
-                    <td className="text-right">{r(d.median)}</td>
-                    <td className="text-right">{r(d.p90)}</td>
-                    <td className="text-right">{r(d.fastest)}</td>
-                    <td className="text-right">{r(d.slowest)}</td>
+                    <td className="text-right">{formatDuration(d.avg)}</td>
+                    <td className="text-right">{formatDuration(d.median)}</td>
+                    <td className="text-right">{formatDuration(d.p90)}</td>
+                    <td className="text-right">{formatDuration(d.fastest)}</td>
+                    <td className="text-right">{formatDuration(d.slowest)}</td>
                   </tr>
-                )
+                );
               })}
             </tbody>
           </table>
@@ -104,51 +116,66 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
       {/* Heatmap */}
       <div className="bh-card p-4 overflow-x-auto">
         <div className="flex items-center gap-4 mb-3">
-          <p className="bh-metric-label">
-            Weekly Heatmap
-          </p>
+          <p className="bh-metric-label">Weekly Heatmap</p>
           <div className="flex gap-1.5">
-            {(['avg', 'total', 'count'] as MetricKey[]).map(m => (
+            {(["avg", "total", "count"] as MetricKey[]).map((m) => (
               <button
                 key={m}
                 onClick={() => setMetric(m)}
                 className={`${baseBtnCls} ${metric === m ? activeBtnCls : inactiveBtnCls}`}
               >
-                {m === 'avg' ? 'Avg Duration' : m === 'total' ? 'Total Min' : 'Count'}
+                {m === "avg"
+                  ? "Avg Duration"
+                  : m === "total"
+                    ? "Total Time"
+                    : "Count"}
               </button>
             ))}
           </div>
         </div>
 
         {weeks.length > 0 && (
-          <table className="text-xs">
+          <table className="text-xs w-full">
             <thead>
               <tr>
-                <th className="px-2 py-1 text-left font-semibold text-muted-foreground">Device</th>
-                {weeks.map(w => (
-                  <th key={w} className="px-2 py-1 font-semibold whitespace-nowrap text-muted-foreground">
+                <th className="px-2 py-1 text-left font-semibold text-muted-foreground">
+                  Device
+                </th>
+                {weeks.map((w) => (
+                  <th
+                    key={w}
+                    className="px-2 py-1 font-semibold whitespace-nowrap text-muted-foreground"
+                  >
                     {formatShortDate(w)}
                   </th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {devices.map(device => (
+              {devices.map((device) => (
                 <tr key={device}>
-                  <td className="px-2 py-1 font-mono font-semibold whitespace-nowrap">{device}</td>
-                  {weeks.map(week => {
-                    const cell = cellMap.get(`${device}||${week}`)
-                    const val = cell ? cell[metric] : null
+                  <td className="px-2 py-1 font-mono font-semibold whitespace-nowrap">
+                    {device}
+                  </td>
+                  {weeks.map((week) => {
+                    const cell = cellMap.get(`${device}||${week}`);
+                    const val = cell ? cell[metric] : null;
                     return (
                       <td
                         key={week}
                         className={`px-2 py-1 text-center rounded-sm ${
-                          val !== null ? getCellColor(val, maxVal) : 'text-slate-300'
+                          val !== null
+                            ? getCellColor(val, maxVal)
+                            : "text-slate-300"
                         }`}
                       >
-                        {val !== null ? (metric === 'count' ? val : r(val)) : '–'}
+                        {val !== null
+                          ? metric === "count"
+                            ? val
+                            : formatDuration(val)
+                          : "–"}
                       </td>
-                    )
+                    );
                   })}
                 </tr>
               ))}
@@ -170,10 +197,10 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
       {drillDevice && (
         <DrilldownPanel
           title={`Device: ${drillDevice}`}
-          events={events.filter(e => e.device === drillDevice)}
+          events={events.filter((e) => e.device === drillDevice)}
           onClose={() => setDrillDevice(null)}
         />
       )}
     </section>
-  )
+  );
 }

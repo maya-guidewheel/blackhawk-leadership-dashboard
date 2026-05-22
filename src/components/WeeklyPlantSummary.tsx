@@ -1,16 +1,12 @@
 import { useState } from 'react'
 import type { WeeklyPlantRow, ColorChangeEvent } from '../data/types'
-import { formatDate, formatShortDate } from '../utils/dates'
+import { formatDate, formatShortDate, formatDuration } from '../utils/dates'
 import { trackEvent } from '../analytics/posthog'
 import DrilldownPanel from './DrilldownPanel'
 
 interface Props {
   data: WeeklyPlantRow[]
   events: ColorChangeEvent[]
-}
-
-function r(n: number): string {
-  return (Math.round(n * 10) / 10).toLocaleString()
 }
 
 export default function WeeklyPlantSummary({ data, events }: Props) {
@@ -36,8 +32,7 @@ export default function WeeklyPlantSummary({ data, events }: Props) {
     <section className="mb-8">
       <h2 className="bh-section-title">Weekly Plant Summary</h2>
       <div className="bh-card overflow-hidden">
-        {/* Fixed-height scrollable body — sticky thead stays in place */}
-        <div className="overflow-x-auto">
+        <div className="overflow-auto" style={{ maxHeight: 340 }}>
           <table className="bh-table">
             <thead>
               <tr className="text-left">
@@ -51,10 +46,6 @@ export default function WeeklyPlantSummary({ data, events }: Props) {
                 <th>Slowest</th>
               </tr>
             </thead>
-          </table>
-        </div>
-        <div className="overflow-x-auto overflow-y-auto" style={{ maxHeight: 340 }}>
-          <table className="bh-table">
             <tbody>
               {sorted.map((d, i) => (
                 <tr
@@ -65,17 +56,17 @@ export default function WeeklyPlantSummary({ data, events }: Props) {
                   <td className="font-medium whitespace-nowrap">{formatShortDate(d.week_start)}</td>
                   <td className="font-semibold">{d.plant}</td>
                   <td className="text-right">{d.count}</td>
-                  <td className="text-right">{r(d.avg)}</td>
-                  <td className="text-right">{r(d.p90)}</td>
-                  <td className="text-right">{r(d.total)}</td>
+                  <td className="text-right">{formatDuration(d.avg)}</td>
+                  <td className="text-right">{formatDuration(d.p90)}</td>
+                  <td className="text-right">{formatDuration(d.total)}</td>
                   <td className="text-xs">
-                    {r(d.fastest)} min<br />
+                    {formatDuration(d.fastest)}<br />
                     <span className="text-muted-foreground">
                       {d.fastestEvent?.device} {d.fastestEvent ? formatDate(d.fastestEvent.start_dt) : ''}
                     </span>
                   </td>
                   <td className="text-xs">
-                    {r(d.slowest)} min<br />
+                    {formatDuration(d.slowest)}<br />
                     <span className="text-muted-foreground">
                       {d.slowestEvent?.device} {d.slowestEvent ? formatDate(d.slowestEvent.start_dt) : ''}
                     </span>

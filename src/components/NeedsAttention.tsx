@@ -1,5 +1,5 @@
 import type { ColorChangeEvent, DeviceSummary, WeeklyPlantRow, PlantSummary } from '../data/types'
-import { formatDate, formatShortDate } from '../utils/dates'
+import { formatDate, formatShortDate, formatDuration } from '../utils/dates'
 
 interface Props {
   events: ColorChangeEvent[]
@@ -7,10 +7,6 @@ interface Props {
   plantData: PlantSummary[]
   weeklyPlantData: WeeklyPlantRow[]
   threshold: number
-}
-
-function r(n: number): string {
-  return (Math.round(n * 10) / 10).toLocaleString()
 }
 
 function statusDot(p90: number, threshold: number) {
@@ -68,7 +64,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                 {fastestPlant.plant}
               </div>
               <div className="text-sm mt-0.5 text-muted-foreground">
-                {r(fastestPlant.avg)} min avg · {fastestPlant.count} changeovers
+                {formatDuration(fastestPlant.avg)} avg · {fastestPlant.count} changeovers
               </div>
             </div>
           )}
@@ -83,7 +79,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                 {slowestPlant.plant}
               </div>
               <div className="text-sm mt-0.5 text-muted-foreground">
-                {r(slowestPlant.avg)} min avg · P90: {r(slowestPlant.p90)} min
+                {formatDuration(slowestPlant.avg)} avg · P90: {formatDuration(slowestPlant.p90)}
               </div>
             </div>
           )}
@@ -98,7 +94,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                 {topOpportunity.device}
               </div>
               <div className="text-sm mt-0.5 text-muted-foreground">
-                P90: {r(topOpportunity.p90)} min · {r(topOpportunity.gap)} min above target
+                P90: {formatDuration(topOpportunity.p90)} · {formatDuration(topOpportunity.gap)} above target
               </div>
             </div>
           ) : (
@@ -108,7 +104,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
               </div>
               <div className="text-lg font-bold text-success">All On Target</div>
               <div className="text-sm mt-0.5 text-muted-foreground">
-                All machines P90 ≤ {threshold} min
+                All machines P90 ≤ {formatDuration(threshold)}
               </div>
             </div>
           )}
@@ -138,7 +134,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                     <td className="font-mono text-xs">{e.device}</td>
                     <td className="text-xs">{formatDate(e.start_dt)}</td>
                     <td className="text-xs">{formatDate(e.end_dt)}</td>
-                    <td className="text-right font-semibold text-danger">{r(e.duration)}</td>
+                    <td className="text-right font-semibold text-danger">{formatDuration(e.duration)}</td>
                     <td className="text-xs">{e.status}</td>
                   </tr>
                 ))}
@@ -150,7 +146,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
         {/* Off-target machines */}
         <div className="bh-card overflow-hidden">
           <div className="bh-sub-header">
-            <h3>Off-Target Machines (P90 &gt; {threshold} min)</h3>
+            <h3>Off-Target Machines (P90 &gt; {formatDuration(threshold)})</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="bh-table">
@@ -178,8 +174,8 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                       <tr key={d.device}>
                         <td className="font-mono text-xs font-semibold">{d.device}</td>
                         <td>{d.plant}</td>
-                        <td className="text-right font-semibold text-danger">{r(d.p90)}</td>
-                        <td className="text-right">{r(d.avg)}</td>
+                        <td className="text-right font-semibold text-danger">{formatDuration(d.p90)}</td>
+                        <td className="text-right">{formatDuration(d.avg)}</td>
                         <td className="text-right">{d.count}</td>
                         <td>
                           <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${s.badgeClass}`}>
@@ -206,7 +202,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                 <th>Plant</th>
                 <th>Week</th>
                 <th>Device</th>
-                <th className="text-right">Duration (min)</th>
+                <th className="text-right">Duration</th>
                 <th>Start</th>
               </tr>
             </thead>
@@ -216,7 +212,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                   <td>{w.plant}</td>
                   <td>{formatShortDate(w.week_start)}</td>
                   <td className="font-mono text-xs">{w.device}</td>
-                  <td className="text-right font-semibold text-danger">{r(w.duration)}</td>
+                  <td className="text-right font-semibold text-danger">{formatDuration(w.duration)}</td>
                   <td className="text-xs">{formatDate(w.start)}</td>
                 </tr>
               ))}

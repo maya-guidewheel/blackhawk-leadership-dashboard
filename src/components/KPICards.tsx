@@ -1,13 +1,10 @@
 import type { StatsSummary, ColorChangeEvent } from '../data/types'
+import { formatDuration } from '../utils/dates'
 
 interface Props {
   stats: StatsSummary
   threshold: number
   events: ColorChangeEvent[]
-}
-
-function fmt(n: number): string {
-  return (Math.round(n * 10) / 10).toLocaleString()
 }
 
 export default function KPICards({ stats, threshold, events }: Props) {
@@ -22,13 +19,13 @@ export default function KPICards({ stats, threshold, events }: Props) {
     : 'text-danger'
 
   const metricCards: { label: string; value: string; suffix?: string; colorClass?: string }[] = [
-    { label: 'Total Changeovers', value: fmt(stats.count) },
+    { label: 'Total Changeovers', value: stats.count.toLocaleString() },
     { label: '% On Target', value: `${onTargetPct}%`, colorClass: pctColorClass },
-    { label: 'Average Duration', value: fmt(stats.avg), suffix: ' min' },
-    { label: 'Median Duration', value: fmt(stats.median), suffix: ' min' },
-    { label: '90th Percentile', value: fmt(stats.p90), suffix: ' min' },
-    { label: 'Fastest Event', value: fmt(stats.fastest), suffix: ' min' },
-    { label: 'Slowest Event', value: fmt(stats.slowest), suffix: ' min' },
+    { label: 'Average Duration', value: formatDuration(stats.avg) },
+    { label: 'Median Duration', value: formatDuration(stats.median) },
+    { label: '90th Percentile', value: formatDuration(stats.p90) },
+    { label: 'Fastest Event', value: formatDuration(stats.fastest) },
+    { label: 'Slowest Event', value: formatDuration(stats.slowest) },
   ]
 
   return (

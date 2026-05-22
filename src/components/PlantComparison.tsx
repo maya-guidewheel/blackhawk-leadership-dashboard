@@ -1,15 +1,11 @@
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import type { PlantSummary } from '../data/types'
-import { formatDate } from '../utils/dates'
+import { formatDate, formatDuration } from '../utils/dates'
 import { axisTick, tooltipStyle, tooltipCursorFill, gridStroke, chartColor } from '../utils/chartTheme'
 
 interface Props {
   data: PlantSummary[]
   threshold: number
-}
-
-function r(n: number): string {
-  return (Math.round(n * 10) / 10).toLocaleString()
 }
 
 export default function PlantComparison({ data }: Props) {
@@ -46,18 +42,18 @@ export default function PlantComparison({ data }: Props) {
                     <tr key={d.plant}>
                       <td className="font-semibold">{d.plant}</td>
                       <td className="text-right">{d.count}</td>
-                      <td className="text-right">{r(d.avg)}</td>
-                      <td className="text-right">{r(d.median)}</td>
-                      <td className="text-right">{r(d.p90)}</td>
-                      <td className="text-right">{r(d.total)}</td>
+                      <td className="text-right">{formatDuration(d.avg)}</td>
+                      <td className="text-right">{formatDuration(d.median)}</td>
+                      <td className="text-right">{formatDuration(d.p90)}</td>
+                      <td className="text-right">{formatDuration(d.total)}</td>
                       <td className="text-xs">
-                        {r(d.fastest)} min<br />
+                        {formatDuration(d.fastest)}<br />
                         <span className="text-muted-foreground">
                           {d.fastestEvent?.device} {d.fastestEvent ? formatDate(d.fastestEvent.start_dt) : ''}
                         </span>
                       </td>
                       <td className="text-xs">
-                        {r(d.slowest)} min<br />
+                        {formatDuration(d.slowest)}<br />
                         <span className="text-muted-foreground">
                           {d.slowestEvent?.device} {d.slowestEvent ? formatDate(d.slowestEvent.start_dt) : ''}
                         </span>

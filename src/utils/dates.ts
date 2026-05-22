@@ -31,3 +31,25 @@ export function formatShortDate(s: string): string {
   if (!isValid(dt)) return s
   return format(dt, 'MMM dd')
 }
+
+// Format a duration in minutes as "45m", "1h 30m", "8h", "1d 9h 30m" for display.
+export function formatDuration(minutes: number): string {
+  if (!isFinite(minutes) || minutes < 0) return '–'
+  if (minutes < 1) {
+    return minutes === 0 ? '0m' : '<1m'
+  }
+  if (minutes < 60) {
+    return minutes < 10
+      ? `${Math.round(minutes * 10) / 10}m`
+      : `${Math.round(minutes)}m`
+  }
+  const totalMins = Math.round(minutes)
+  const days = Math.floor(totalMins / 1440)
+  const hours = Math.floor((totalMins % 1440) / 60)
+  const mins = totalMins % 60
+  const parts: string[] = []
+  if (days) parts.push(`${days}d`)
+  if (hours) parts.push(`${hours}h`)
+  if (mins) parts.push(`${mins}m`)
+  return parts.join(' ')
+}
