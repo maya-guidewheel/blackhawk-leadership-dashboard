@@ -65,47 +65,43 @@ export default function EnergyGate({ children, onAuth }: { children: ReactNode; 
   }
 
   return (
-    <div className="flex items-center justify-center py-24">
-      <form onSubmit={handleSubmit} className="bh-card p-8 w-full max-w-sm">
+    <div className="flex items-center justify-center py-24 px-4">
+      <form onSubmit={handleSubmit} className="rounded-lg border border-border bg-card p-6 w-full max-w-sm shadow-sm">
         <div className="mb-6">
-          <div
-            className="inline-flex items-center gap-2 text-xs font-bold uppercase tracking-wider px-2.5 py-1 rounded-full mb-3"
-            style={{ background: '#dbeafe', color: '#1d4ed8' }}
-          >
-            <svg width="12" height="12" viewBox="0 0 20 20" fill="currentColor">
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-warning/10 text-warning px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider mb-3">
+            <svg width="10" height="10" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
               <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
             </svg>
-            Executive Access Required
-          </div>
-          <h2 className="text-lg font-bold mb-1" style={{ color: 'var(--color-primary)' }}>
-            Energy &amp; Cost Analysis
+            Restricted
+          </span>
+          <h2 className="text-lg font-semibold text-foreground leading-tight">
+            Energy &amp; Cost — Executive Access
           </h2>
-          <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+          <p className="text-sm text-muted-foreground mt-1">
             This section contains financial data restricted to leadership. Enter the executive password to continue.
           </p>
         </div>
 
-        <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-muted)' }}>
+        <label htmlFor="bh-energy-password" className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
           Executive Password
         </label>
         <input
+          id="bh-energy-password"
           type="password"
           value={password}
           onChange={e => setPassword(e.target.value)}
-          className="w-full border rounded px-3 py-2 mb-1 focus:outline-none focus:ring-2 text-sm"
-          style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+          className="w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground placeholder:text-pale-foreground focus:outline-none focus:ring-2 focus:ring-btn-primary/30 focus:border-btn-primary"
           autoFocus
           disabled={checking}
           placeholder="Enter password"
         />
         {error && (
-          <p className="text-sm mt-1 mb-2" style={{ color: 'var(--color-danger)' }}>{error}</p>
+          <p className="mt-2 text-sm text-danger">{error}</p>
         )}
         <button
           type="submit"
           disabled={checking}
-          className="w-full mt-4 text-white rounded px-4 py-2.5 font-semibold transition-opacity hover:opacity-90 text-sm disabled:opacity-60"
-          style={{ backgroundColor: 'var(--color-secondary)' }}
+          className="w-full mt-4 rounded-md bg-btn-primary text-btn-primary-foreground hover:bg-btn-primary-accent disabled:opacity-60 px-4 py-2.5 text-sm font-medium transition-colors"
         >
           {checking ? 'Checking…' : 'Access Energy Data'}
         </button>

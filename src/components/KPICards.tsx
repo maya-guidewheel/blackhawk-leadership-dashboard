@@ -15,15 +15,15 @@ export default function KPICards({ stats, threshold, events }: Props) {
     ? Math.round((events.filter(e => e.duration <= threshold).length / events.length) * 100)
     : 0
 
-  const pctColor = onTargetPct >= 90
-    ? 'var(--color-success, #16a34a)'
+  const pctColorClass = onTargetPct >= 90
+    ? 'text-success'
     : onTargetPct >= 70
-    ? '#d97706'
-    : 'var(--color-danger)'
+    ? 'text-warning'
+    : 'text-danger'
 
-  const metricCards: { label: string; value: string; suffix?: string; color?: string }[] = [
+  const metricCards: { label: string; value: string; suffix?: string; colorClass?: string }[] = [
     { label: 'Total Changeovers', value: fmt(stats.count) },
-    { label: '% On Target', value: `${onTargetPct}%`, color: pctColor },
+    { label: '% On Target', value: `${onTargetPct}%`, colorClass: pctColorClass },
     { label: 'Average Duration', value: fmt(stats.avg), suffix: ' min' },
     { label: 'Median Duration', value: fmt(stats.median), suffix: ' min' },
     { label: '90th Percentile', value: fmt(stats.p90), suffix: ' min' },
@@ -34,23 +34,18 @@ export default function KPICards({ stats, threshold, events }: Props) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-7">
       {metricCards.map(c => (
-        <div key={c.label} className="bh-card p-4">
-          <div
-            className="text-[0.65rem] font-bold uppercase tracking-wider mb-2 leading-tight"
-            style={{ color: 'var(--color-muted)' }}
-          >
-            {c.label}
-          </div>
-          <div className="flex items-baseline gap-0.5">
-            <span
-              className="text-2xl font-bold leading-none"
-              style={{ color: c.color ?? 'var(--color-primary)' }}
-            >
+        <div
+          key={c.label}
+          className="rounded-lg border border-border bg-card p-4 transition-shadow hover:shadow-sm"
+        >
+          <div className="bh-metric-label mb-2">{c.label}</div>
+          <div className="flex items-baseline gap-1">
+            <span className={`text-2xl font-semibold leading-none ${c.colorClass ?? 'text-foreground'}`}>
               {c.value}
             </span>
             {c.suffix && (
-              <span className="text-xs font-medium" style={{ color: 'var(--color-muted)' }}>
-                {c.suffix}
+              <span className="text-xs font-medium text-muted-foreground">
+                {c.suffix.trim()}
               </span>
             )}
           </div>

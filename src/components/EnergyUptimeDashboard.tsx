@@ -4,6 +4,7 @@ import {
   Tooltip, Legend, ResponsiveContainer, BarChart
 } from 'recharts'
 import type { EnergyRow, DowntimeEvent } from '../data/types'
+import { axisTick, tooltipStyle, gridStroke, chartColor } from '../utils/chartTheme'
 
 interface Props {
   energyRows: EnergyRow[]
@@ -14,15 +15,10 @@ function fmt(n: number, d = 2): string {
   return n.toFixed(d)
 }
 
-const cardStyle: React.CSSProperties = {
-  background: 'var(--color-card)',
-  border: '1px solid var(--color-border)',
-  borderRadius: '0.75rem',
-  padding: '1.25rem',
-}
+const cardCls = 'bg-card border border-border rounded-xl p-5'
 
-const P1_COLOR = '#6366f1'  // indigo for Period 1
-const P2_COLOR = 'var(--color-accent)'  // orange for Period 2
+const P1_COLOR = chartColor(0) // GW blue
+const P2_COLOR = chartColor(3) // distinct
 
 export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Props) {
   const machines = useMemo(
@@ -133,17 +129,14 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
 
   if (energyRows.length === 0) {
     return (
-      <div
-        className="rounded-xl p-8 text-center"
-        style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)' }}
-      >
-        <p className="text-base font-semibold mb-2" style={{ color: 'var(--color-text)' }}>
+      <div className="rounded-xl p-8 text-center bg-card border border-border">
+        <p className="text-base font-semibold mb-2 text-foreground">
           Energy data not loaded in this dashboard
         </p>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-sm text-muted-foreground">
           This view is ready for use once approved energy/runtime data is uploaded.
         </p>
-        <p className="text-xs mt-3" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-xs mt-3 text-muted-foreground">
           Raw energy usage must be normalized by runtime to fairly compare before/after changes.
         </p>
       </div>
@@ -154,47 +147,43 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
     <div className="space-y-6">
 
       {/* ── Page header ───────────────────────────────────────────────────── */}
-      <div style={cardStyle}>
-        <h2 className="text-base font-semibold mb-2" style={{ color: 'var(--color-text)' }}>
+      <div className={cardCls}>
+        <h2 className="text-base font-semibold mb-2 text-foreground">
           Energy vs Uptime: Period-over-Period Comparison
         </h2>
-        <p className="text-sm mb-3" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-sm mb-3 text-muted-foreground">
           Compare energy usage normalized by runtime across two selected periods. This helps evaluate whether energy efficiency changed after an operational change, such as insulation on mold 288 barrels.
         </p>
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs" style={{ color: 'var(--color-muted)' }}>
-          <div><span className="font-semibold" style={{ color: 'var(--color-text)' }}>kWh used</span> — total energy consumed in the selected period</div>
-          <div><span className="font-semibold" style={{ color: 'var(--color-text)' }}>Runtime hours</span> — estimated machine uptime during the period</div>
-          <div><span className="font-semibold" style={{ color: 'var(--color-text)' }}>kWh/runtime hour</span> — normalized energy efficiency metric</div>
-          <div><span className="font-semibold" style={{ color: 'var(--color-text)' }}>Change %</span> — Period 2 compared to Period 1</div>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs text-muted-foreground">
+          <div><span className="font-semibold text-foreground">kWh used</span> — total energy consumed in the selected period</div>
+          <div><span className="font-semibold text-foreground">Runtime hours</span> — estimated machine uptime during the period</div>
+          <div><span className="font-semibold text-foreground">kWh/runtime hour</span> — normalized energy efficiency metric</div>
+          <div><span className="font-semibold text-foreground">Change %</span> — Period 2 compared to Period 1</div>
         </div>
       </div>
 
       {/* ── Disclaimer ────────────────────────────────────────────────────── */}
-      <div
-        className="rounded-lg px-4 py-3 text-sm"
-        style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af' }}
-      >
+      <div className="rounded-lg px-4 py-3 text-sm bg-btn-primary/5 border border-btn-primary/20 text-btn-primary">
         <span className="font-semibold">This tab shows energy usage only.</span>
         {' '}Cost, pricing, and labor rate data are not included.
       </div>
 
       {/* ── Machine & Period Filters ──────────────────────────────────────── */}
-      <div style={cardStyle}>
+      <div className={cardCls}>
         <div className="flex flex-wrap items-start gap-6">
 
           {/* Machine picker */}
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Machine</label>
+            <label className="bh-metric-label mb-1 block">Machine</label>
             <select
               value={selectedMachine}
               onChange={e => setSelectedMachine(e.target.value)}
-              className="text-sm rounded px-3 py-1.5"
-              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
             >
               {machines.map(m => <option key={m} value={m}>{m}</option>)}
             </select>
             {m3e18Missing && (
-              <p className="text-xs mt-1" style={{ color: '#f59e0b' }}>
+              <p className="text-xs mt-1 text-warning">
                 M3E-18 / Mold 288 not found in current energy dataset.
               </p>
             )}
@@ -207,22 +196,22 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
             </div>
             <div className="flex items-end gap-2">
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--color-muted)' }}>From</label>
+                <label className="block text-xs mb-1 text-muted-foreground">From</label>
                 <input type="date" value={p1From} onChange={e => setP1From(e.target.value)}
-                  className="text-sm rounded px-3 py-1.5"
-                  style={{ background: 'var(--color-background)', border: `1px solid ${P1_COLOR}`, color: 'var(--color-text)' }}
+                  className="text-sm rounded px-3 py-1.5 bg-background text-foreground"
+                  style={{ border: `1px solid ${P1_COLOR}` }}
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--color-muted)' }}>To</label>
+                <label className="block text-xs mb-1 text-muted-foreground">To</label>
                 <input type="date" value={p1To} onChange={e => setP1To(e.target.value)}
-                  className="text-sm rounded px-3 py-1.5"
-                  style={{ background: 'var(--color-background)', border: `1px solid ${P1_COLOR}`, color: 'var(--color-text)' }}
+                  className="text-sm rounded px-3 py-1.5 bg-background text-foreground"
+                  style={{ border: `1px solid ${P1_COLOR}` }}
                 />
               </div>
             </div>
             {p1Metrics && (
-              <p className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>{p1Metrics.days} days of data</p>
+              <p className="text-xs mt-1 text-muted-foreground">{p1Metrics.days} days of data</p>
             )}
           </div>
 
@@ -233,22 +222,22 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
             </div>
             <div className="flex items-end gap-2">
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--color-muted)' }}>From</label>
+                <label className="block text-xs mb-1 text-muted-foreground">From</label>
                 <input type="date" value={p2From} onChange={e => setP2From(e.target.value)}
-                  className="text-sm rounded px-3 py-1.5"
-                  style={{ background: 'var(--color-background)', border: `1px solid ${P2_COLOR}`, color: 'var(--color-text)' }}
+                  className="text-sm rounded px-3 py-1.5 bg-background text-foreground"
+                  style={{ border: `1px solid ${P2_COLOR}` }}
                 />
               </div>
               <div>
-                <label className="block text-xs mb-1" style={{ color: 'var(--color-muted)' }}>To</label>
+                <label className="block text-xs mb-1 text-muted-foreground">To</label>
                 <input type="date" value={p2To} onChange={e => setP2To(e.target.value)}
-                  className="text-sm rounded px-3 py-1.5"
-                  style={{ background: 'var(--color-background)', border: `1px solid ${P2_COLOR}`, color: 'var(--color-text)' }}
+                  className="text-sm rounded px-3 py-1.5 bg-background text-foreground"
+                  style={{ border: `1px solid ${P2_COLOR}` }}
                 />
               </div>
             </div>
             {p2Metrics && (
-              <p className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>{p2Metrics.days} days of data</p>
+              <p className="text-xs mt-1 text-muted-foreground">{p2Metrics.days} days of data</p>
             )}
           </div>
 
@@ -256,60 +245,57 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
       </div>
 
       {/* ── Pilot note ────────────────────────────────────────────────────── */}
-      <div
-        className="rounded-lg px-4 py-3 text-xs"
-        style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', color: 'var(--color-muted)' }}
-      >
-        <span className="font-semibold" style={{ color: 'var(--color-text)' }}>Pilot focus:</span>
+      <div className="rounded-lg px-4 py-3 text-xs bg-card border border-border text-muted-foreground">
+        <span className="font-semibold text-foreground">Pilot focus:</span>
         {' '}M3E-18 / Mold 288 barrel insulation project. Use Period 1 and Period 2 to compare energy use before and after the insulation change.
       </div>
 
       {/* ── Metrics Cards ─────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
         {/* Period 1 */}
-        <div style={{ ...cardStyle, borderTop: `3px solid ${P1_COLOR}` }}>
+        <div className={cardCls} style={{ borderTop: `3px solid ${P1_COLOR}` }}>
           <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: P1_COLOR }}>Period 1 — kWh Used</div>
-          <div className="text-2xl font-bold" style={{ color: 'var(--color-text)' }}>
+          <div className="text-2xl font-bold text-foreground">
             {p1Metrics ? p1Metrics.totalKWh.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
           </div>
-          {p1Metrics && <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>{p1Metrics.days} days</div>}
+          {p1Metrics && <div className="text-xs mt-0.5 text-muted-foreground">{p1Metrics.days} days</div>}
         </div>
 
-        <div style={{ ...cardStyle, borderTop: `3px solid ${P1_COLOR}` }}>
+        <div className={cardCls} style={{ borderTop: `3px solid ${P1_COLOR}` }}>
           <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: P1_COLOR }}>Period 1 — Runtime Hours</div>
-          <div className="text-2xl font-bold" style={{ color: 'var(--color-text)' }}>
+          <div className="text-2xl font-bold text-foreground">
             {p1Metrics ? fmt(p1Metrics.runtimeHours, 0) : '—'}
           </div>
-          <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>est. from downtime data</div>
+          <div className="text-xs mt-0.5 text-muted-foreground">est. from downtime data</div>
         </div>
 
-        <div style={{ ...cardStyle, borderTop: `3px solid ${P1_COLOR}` }}>
+        <div className={cardCls} style={{ borderTop: `3px solid ${P1_COLOR}` }}>
           <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: P1_COLOR }}>Period 1 — kWh/Runtime Hour</div>
-          <div className="text-2xl font-bold" style={{ color: 'var(--color-text)' }}>
+          <div className="text-2xl font-bold text-foreground">
             {p1Metrics ? fmt(p1Metrics.kWhPerRuntimeHour) : '—'}
           </div>
         </div>
 
         {/* Period 2 */}
-        <div style={{ ...cardStyle, borderTop: `3px solid ${P2_COLOR}` }}>
+        <div className={cardCls} style={{ borderTop: `3px solid ${P2_COLOR}` }}>
           <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: P2_COLOR }}>Period 2 — kWh Used</div>
-          <div className="text-2xl font-bold" style={{ color: 'var(--color-text)' }}>
+          <div className="text-2xl font-bold text-foreground">
             {p2Metrics ? p2Metrics.totalKWh.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}
           </div>
-          {p2Metrics && <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>{p2Metrics.days} days</div>}
+          {p2Metrics && <div className="text-xs mt-0.5 text-muted-foreground">{p2Metrics.days} days</div>}
         </div>
 
-        <div style={{ ...cardStyle, borderTop: `3px solid ${P2_COLOR}` }}>
+        <div className={cardCls} style={{ borderTop: `3px solid ${P2_COLOR}` }}>
           <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: P2_COLOR }}>Period 2 — Runtime Hours</div>
-          <div className="text-2xl font-bold" style={{ color: 'var(--color-text)' }}>
+          <div className="text-2xl font-bold text-foreground">
             {p2Metrics ? fmt(p2Metrics.runtimeHours, 0) : '—'}
           </div>
-          <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>est. from downtime data</div>
+          <div className="text-xs mt-0.5 text-muted-foreground">est. from downtime data</div>
         </div>
 
-        <div style={{ ...cardStyle, borderTop: `3px solid ${P2_COLOR}` }}>
+        <div className={cardCls} style={{ borderTop: `3px solid ${P2_COLOR}` }}>
           <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: P2_COLOR }}>Period 2 — kWh/Runtime Hour</div>
-          <div className="text-2xl font-bold" style={{ color: 'var(--color-text)' }}>
+          <div className="text-2xl font-bold text-foreground">
             {p2Metrics ? fmt(p2Metrics.kWhPerRuntimeHour) : '—'}
           </div>
         </div>
@@ -317,17 +303,14 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
 
       {/* ── Delta Card ────────────────────────────────────────────────────── */}
       {pctChange !== null && (
-        <div style={{
-          ...cardStyle,
-          borderLeft: `4px solid ${pctChange <= 0 ? 'var(--color-accent)' : 'var(--color-danger)'}`,
-        }}>
-          <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>
+        <div className={`${cardCls} border-l-4 ${pctChange <= 0 ? 'border-l-success' : 'border-l-danger'}`}>
+          <div className="bh-metric-label mb-1">
             Change in kWh/Runtime Hour (Period 2 vs Period 1)
           </div>
-          <div className="text-3xl font-bold" style={{ color: pctChange <= 0 ? 'var(--color-accent)' : 'var(--color-danger)' }}>
+          <div className={`text-3xl font-bold ${pctChange <= 0 ? 'text-success' : 'text-danger'}`}>
             {pctChange <= 0 ? '' : '+'}{fmt(pctChange, 1)}%
           </div>
-          <div className="text-sm mt-1" style={{ color: 'var(--color-muted)' }}>
+          <div className="text-sm mt-1 text-muted-foreground">
             {pctChange <= 0
               ? `Energy efficiency improved — ${fmt(Math.abs(pctChange), 1)}% less energy per runtime hour in Period 2`
               : `Energy per runtime hour increased ${fmt(pctChange, 1)}% in Period 2 vs Period 1`}
@@ -337,25 +320,25 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
 
       {/* ── Period Summary Bar Chart ───────────────────────────────────────── */}
       {summaryChartData.length > 0 && (
-        <div style={cardStyle}>
-          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text)' }}>
+        <div className={cardCls}>
+          <h2 className="text-sm font-semibold mb-3 text-foreground">
             kWh per Runtime Hour — Period 1 vs Period 2
           </h2>
           <div style={{ height: 180 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={summaryChartData} margin={{ top: 4, right: 8, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                <XAxis dataKey="period" tick={{ fontSize: 11, fill: 'var(--color-muted)' }} />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--color-muted)' }} />
+                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                <XAxis dataKey="period" tick={axisTick} />
+                <YAxis tick={axisTick} />
                 <Tooltip
-                  contentStyle={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 11 }}
+                  contentStyle={tooltipStyle}
                   formatter={(v: number) => [`${fmt(v)} kWh/hr`, 'kWh per Runtime Hour']}
                 />
                 <Bar
                   dataKey="kWhPerHour"
                   name="kWh/Runtime Hour"
                   radius={[4, 4, 0, 0]}
-                  fill="var(--color-accent)"
+                  fill={chartColor(0)}
                 />
               </BarChart>
             </ResponsiveContainer>
@@ -365,22 +348,22 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
 
       {/* ── Daily kWh + Runtime Hours Chart ───────────────────────────────── */}
       {dailyChartData.length > 0 && (
-        <div style={cardStyle}>
-          <h2 className="text-sm font-semibold mb-1" style={{ color: 'var(--color-text)' }}>
+        <div className={cardCls}>
+          <h2 className="text-sm font-semibold mb-1 text-foreground">
             Daily kWh Usage vs Runtime Hours
           </h2>
-          <p className="text-xs mb-3" style={{ color: 'var(--color-muted)' }}>
+          <p className="text-xs mb-3 text-muted-foreground">
             Bars show daily kWh by period. Line shows estimated runtime hours (24h − downtime). Use this to see whether higher kWh days are simply because the machine ran more.
           </p>
           <div style={{ height: 240 }}>
             <ResponsiveContainer width="100%" height="100%">
               <ComposedChart data={dailyChartData} margin={{ top: 4, right: 30, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                <XAxis dataKey="date" tick={{ fontSize: 9, fill: 'var(--color-muted)' }} interval="preserveStartEnd" />
-                <YAxis yAxisId="kwh" tick={{ fontSize: 9, fill: 'var(--color-muted)' }} label={{ value: 'kWh', angle: -90, position: 'insideLeft', fontSize: 9, fill: 'var(--color-muted)', dy: 20 }} />
-                <YAxis yAxisId="runtime" orientation="right" tick={{ fontSize: 9, fill: 'var(--color-muted)' }} label={{ value: 'Runtime hrs', angle: 90, position: 'insideRight', fontSize: 9, fill: 'var(--color-muted)', dy: -40 }} />
+                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                <XAxis dataKey="date" tick={axisTick} interval="preserveStartEnd" />
+                <YAxis yAxisId="kwh" tick={axisTick} label={{ value: 'kWh', angle: -90, position: 'insideLeft', fontSize: 9, fill: 'var(--chart-axis-label)', dy: 20 }} />
+                <YAxis yAxisId="runtime" orientation="right" tick={axisTick} label={{ value: 'Runtime hrs', angle: 90, position: 'insideRight', fontSize: 9, fill: 'var(--chart-axis-label)', dy: -40 }} />
                 <Tooltip
-                  contentStyle={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 11 }}
+                  contentStyle={tooltipStyle}
                   formatter={(v: unknown, name: string) => {
                     const n = typeof v === 'number' ? v : null
                     if (n === null) return [null, name]
@@ -392,7 +375,7 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
                 <Legend wrapperStyle={{ fontSize: 11 }} />
                 <Bar yAxisId="kwh" dataKey="kWhP1" name="Period 1 kWh" fill={P1_COLOR} opacity={0.8} radius={[2, 2, 0, 0]} />
                 <Bar yAxisId="kwh" dataKey="kWhP2" name="Period 2 kWh" fill={P2_COLOR} opacity={0.8} radius={[2, 2, 0, 0]} />
-                <Line yAxisId="runtime" type="monotone" dataKey="runtimeHours" name="Runtime Hours" stroke="#10b981" strokeWidth={2} dot={false} strokeDasharray="4 2" />
+                <Line yAxisId="runtime" type="monotone" dataKey="runtimeHours" name="Runtime Hours" stroke="var(--color-success)" strokeWidth={2} dot={false} strokeDasharray="4 2" />
               </ComposedChart>
             </ResponsiveContainer>
           </div>
@@ -400,11 +383,8 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
       )}
 
       {/* ── Methodology Note ──────────────────────────────────────────────── */}
-      <div
-        className="rounded-lg px-4 py-3 text-xs"
-        style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', color: 'var(--color-muted)' }}
-      >
-        <span className="font-semibold" style={{ color: 'var(--color-text)' }}>Methodology:</span>
+      <div className="rounded-lg px-4 py-3 text-xs bg-card border border-border text-muted-foreground">
+        <span className="font-semibold text-foreground">Methodology:</span>
         {' '}kWh per runtime hour = daily energy ÷ estimated daily runtime.
         Runtime is estimated as 24h minus recorded downtime hours for that day.
         Days without downtime data are treated as 24h full runtime.

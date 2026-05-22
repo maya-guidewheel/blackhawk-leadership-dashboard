@@ -1,5 +1,7 @@
 # Blackhawk Molding — Leadership Dashboard
 
+> UI built with the Guidewheel design system (`@safigen/fd-gw-ui`). See `docs/superpowers/plans/2026-05-22-gw-ui-migration.md` for the migration plan.
+
 Production dashboard for analyzing **changeover time** and **energy cost** by plant and machine, using Guidewheel CSV exports. Deployed on Railway.
 
 ---

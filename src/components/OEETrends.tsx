@@ -7,6 +7,7 @@ import type { OEERecord } from '../data/types'
 import {
   monthlyOEE, quarterlyOEE, periodComparison, oeeByMachine
 } from '../data/oeeAggregations'
+import { axisTick, tooltipStyle, gridStroke, oeeColors } from '../utils/chartTheme'
 
 interface Props {
   records: OEERecord[]
@@ -26,30 +27,11 @@ function inferSite(machine: string): string {
   }
 }
 
-const cardStyle: React.CSSProperties = {
-  background: 'var(--color-card)',
-  border: '1px solid var(--color-border)',
-  borderRadius: '0.75rem',
-  padding: '1.25rem',
-}
+const cardCls = 'bg-card border border-border rounded-xl p-5'
 
-const tableHeaderStyle: React.CSSProperties = {
-  fontSize: '0.7rem',
-  fontWeight: 700,
-  textTransform: 'uppercase' as const,
-  letterSpacing: '0.06em',
-  color: 'var(--color-muted)',
-  padding: '0.5rem 0.75rem',
-  borderBottom: '1px solid var(--color-border)',
-  textAlign: 'left' as const,
-}
+const tableHeaderCls = 'text-[0.7rem] font-bold uppercase tracking-[0.06em] text-muted-foreground px-3 py-2 border-b border-border text-left'
 
-const tableCellStyle: React.CSSProperties = {
-  padding: '0.5rem 0.75rem',
-  fontSize: '0.8rem',
-  color: 'var(--color-text)',
-  borderBottom: '1px solid var(--color-border)',
-}
+const tableCellCls = 'px-3 py-2 text-[0.8rem] text-foreground border-b border-border'
 
 const COMPARISON_PRESETS = [
   { label: 'Previous Period', value: 'previous' },
@@ -178,29 +160,23 @@ export default function OEETrends({ records }: Props) {
     })
   }, [machineTable, machineTableComparison])
 
-  const deltaColor = (d: number | null) => {
-    if (d === null) return 'var(--color-muted)'
-    if (d > 0) return 'var(--color-accent)'
-    if (d < 0) return 'var(--color-danger)'
-    return 'var(--color-text)'
+  const deltaColorCls = (d: number | null) => {
+    if (d === null) return 'text-muted-foreground'
+    if (d > 0) return 'text-success'
+    if (d < 0) return 'text-danger'
+    return 'text-foreground'
   }
 
   if (records.length === 0) {
     return (
-      <div
-        className="rounded-xl p-8 text-center"
-        style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)' }}
-      >
-        <p className="text-base font-semibold mb-2" style={{ color: 'var(--color-text)' }}>
+      <div className="rounded-xl p-8 text-center bg-card border border-border">
+        <p className="text-base font-semibold mb-2 text-foreground">
           OEE data not loaded yet
         </p>
-        <p className="text-sm mb-4" style={{ color: 'var(--color-muted)' }}>
+        <p className="text-sm mb-4 text-muted-foreground">
           Upload a Guidewheel Production CSV to populate OEE Trends.
         </p>
-        <div
-          className="mx-auto max-w-md rounded-lg px-4 py-3 text-sm text-left"
-          style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af' }}
-        >
+        <div className="mx-auto max-w-md rounded-lg px-4 py-3 text-sm text-left bg-btn-primary/5 border border-btn-primary/20 text-btn-primary">
           <p className="font-semibold mb-1">How to upload:</p>
           <p>
             Files with <strong>Production</strong> or <strong>OEE</strong> in the filename will be parsed for
@@ -215,26 +191,24 @@ export default function OEETrends({ records }: Props) {
     <div className="space-y-6">
 
       {/* ── Filters ───────────────────────────────────────────────────────── */}
-      <div style={cardStyle}>
+      <div className={cardCls}>
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Site</label>
+            <label className="bh-metric-label mb-1 block">Site</label>
             <select
               value={siteFilter}
               onChange={e => { setSiteFilter(e.target.value); setMachineFilter('All') }}
-              className="text-sm rounded px-3 py-1.5"
-              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
             >
               {sites.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
           </div>
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Machine</label>
+            <label className="bh-metric-label mb-1 block">Machine</label>
             <select
               value={machineFilter}
               onChange={e => setMachineFilter(e.target.value)}
-              className="text-sm rounded px-3 py-1.5"
-              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
             >
               {machines
                 .filter(m => m === 'All' || siteFilter === 'All' || inferSite(m) === siteFilter)
@@ -243,26 +217,23 @@ export default function OEETrends({ records }: Props) {
             </select>
           </div>
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Current Period From</label>
+            <label className="bh-metric-label mb-1 block">Current Period From</label>
             <input type="date" value={currentFrom} onChange={e => setCurrentFrom(e.target.value)}
-              className="text-sm rounded px-3 py-1.5"
-              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Current Period To</label>
+            <label className="bh-metric-label mb-1 block">Current Period To</label>
             <input type="date" value={currentTo} onChange={e => setCurrentTo(e.target.value)}
-              className="text-sm rounded px-3 py-1.5"
-              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
             />
           </div>
           <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Comparison</label>
+            <label className="bh-metric-label mb-1 block">Comparison</label>
             <select
               value={comparisonMode}
               onChange={e => setComparisonMode(e.target.value)}
-              className="text-sm rounded px-3 py-1.5"
-              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
             >
               {COMPARISON_PRESETS.map(p => <option key={p.value} value={p.value}>{p.label}</option>)}
             </select>
@@ -270,17 +241,15 @@ export default function OEETrends({ records }: Props) {
           {comparisonMode === 'custom' && (
             <>
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Compare From</label>
+                <label className="bh-metric-label mb-1 block">Compare From</label>
                 <input type="date" value={compareFrom} onChange={e => setCompareFrom(e.target.value)}
-                  className="text-sm rounded px-3 py-1.5"
-                  style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+                  className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Compare To</label>
+                <label className="bh-metric-label mb-1 block">Compare To</label>
                 <input type="date" value={compareTo} onChange={e => setCompareTo(e.target.value)}
-                  className="text-sm rounded px-3 py-1.5"
-                  style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+                  className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
                 />
               </div>
             </>
@@ -291,36 +260,36 @@ export default function OEETrends({ records }: Props) {
       {/* ── Period Comparison Cards ───────────────────────────────────────── */}
       {comparison && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <div style={cardStyle}>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Current Period</div>
-            <div className="text-3xl font-bold" style={{ color: 'var(--color-primary)' }}>
+          <div className={cardCls}>
+            <div className="bh-metric-label mb-1">Current Period</div>
+            <div className="text-3xl font-bold text-foreground">
               {fmt(comparison.periodA.avgOEE)}%
             </div>
-            <div className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>
+            <div className="text-xs mt-1 text-muted-foreground">
               {comparison.periodA.label}
             </div>
-            <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>
+            <div className="text-xs mt-0.5 text-muted-foreground">
               {comparison.periodA.count} readings
             </div>
           </div>
-          <div style={cardStyle}>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Comparison Period</div>
-            <div className="text-3xl font-bold" style={{ color: 'var(--color-text)' }}>
+          <div className={cardCls}>
+            <div className="bh-metric-label mb-1">Comparison Period</div>
+            <div className="text-3xl font-bold text-foreground">
               {fmt(comparison.periodB.avgOEE)}%
             </div>
-            <div className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>
+            <div className="text-xs mt-1 text-muted-foreground">
               {comparison.periodB.label}
             </div>
-            <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>
+            <div className="text-xs mt-0.5 text-muted-foreground">
               {comparison.periodB.count} readings
             </div>
           </div>
-          <div style={{ ...cardStyle, borderLeft: `4px solid ${comparison.delta >= 0 ? 'var(--color-accent)' : 'var(--color-danger)'}` }}>
-            <div className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>Change</div>
-            <div className="text-3xl font-bold" style={{ color: comparison.delta >= 0 ? 'var(--color-accent)' : 'var(--color-danger)' }}>
+          <div className={`${cardCls} border-l-4 ${comparison.delta >= 0 ? 'border-l-success' : 'border-l-danger'}`}>
+            <div className="bh-metric-label mb-1">Change</div>
+            <div className={`text-3xl font-bold ${comparison.delta >= 0 ? 'text-success' : 'text-danger'}`}>
               {comparison.delta >= 0 ? '+' : ''}{fmt(comparison.delta)}pp
             </div>
-            <div className="text-sm mt-1" style={{ color: comparison.delta >= 0 ? 'var(--color-accent)' : 'var(--color-danger)' }}>
+            <div className={`text-sm mt-1 ${comparison.delta >= 0 ? 'text-success' : 'text-danger'}`}>
               {comparison.delta >= 0 ? '▲' : '▼'} {fmt(Math.abs(comparison.pctChange))}% vs comparison
             </div>
           </div>
@@ -329,23 +298,23 @@ export default function OEETrends({ records }: Props) {
 
       {/* ── Monthly OEE Trend ─────────────────────────────────────────────── */}
       {monthly.length > 0 && (
-        <div style={cardStyle}>
-          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text)' }}>Monthly OEE Trend</h2>
+        <div className={cardCls}>
+          <h2 className="text-sm font-semibold mb-3 text-foreground">Monthly OEE Trend</h2>
           <div style={{ height: 220 }}>
             <ResponsiveContainer width="100%" height="100%">
               <LineChart data={monthly} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                <XAxis dataKey="month" tick={{ fontSize: 10, fill: 'var(--color-muted)' }} />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--color-muted)' }} tickFormatter={v => `${Math.round(v)}%`} domain={[0, 100]} />
+                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                <XAxis dataKey="month" tick={axisTick} />
+                <YAxis tick={axisTick} tickFormatter={v => `${Math.round(v)}%`} domain={[0, 100]} />
                 <Tooltip
-                  contentStyle={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 11 }}
+                  contentStyle={tooltipStyle}
                   formatter={(v: number) => [`${fmt(v)}%`, 'Avg OEE']}
                 />
-                <Line type="monotone" dataKey="avgOEE" stroke="var(--color-accent)" strokeWidth={2} dot={{ r: 3 }} name="Avg OEE" />
+                <Line type="monotone" dataKey="avgOEE" stroke={oeeColors.overall} strokeWidth={2} dot={{ r: 3 }} name="Avg OEE" />
               </LineChart>
             </ResponsiveContainer>
           </div>
-          <p className="text-xs mt-2" style={{ color: 'var(--color-muted)' }}>
+          <p className="text-xs mt-2 text-muted-foreground">
             Methodology: simple average of daily OEE readings per month.
           </p>
         </div>
@@ -353,19 +322,19 @@ export default function OEETrends({ records }: Props) {
 
       {/* ── Quarterly OEE Chart ───────────────────────────────────────────── */}
       {quarterly.length > 0 && (
-        <div style={cardStyle}>
-          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text)' }}>Quarter-over-Quarter OEE</h2>
+        <div className={cardCls}>
+          <h2 className="text-sm font-semibold mb-3 text-foreground">Quarter-over-Quarter OEE</h2>
           <div style={{ height: 200 }}>
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={quarterly} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" />
-                <XAxis dataKey="quarter" tick={{ fontSize: 10, fill: 'var(--color-muted)' }} />
-                <YAxis tick={{ fontSize: 10, fill: 'var(--color-muted)' }} tickFormatter={v => `${Math.round(v)}%`} domain={[0, 100]} />
+                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} />
+                <XAxis dataKey="quarter" tick={axisTick} />
+                <YAxis tick={axisTick} tickFormatter={v => `${Math.round(v)}%`} domain={[0, 100]} />
                 <Tooltip
-                  contentStyle={{ background: 'var(--color-card)', border: '1px solid var(--color-border)', borderRadius: 8, fontSize: 11 }}
+                  contentStyle={tooltipStyle}
                   formatter={(v: number) => [`${fmt(v)}%`, 'Avg OEE']}
                 />
-                <Bar dataKey="avgOEE" fill="var(--color-accent)" radius={[3, 3, 0, 0]} name="Avg OEE" />
+                <Bar dataKey="avgOEE" fill={oeeColors.overall} radius={[3, 3, 0, 0]} name="Avg OEE" />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -374,34 +343,34 @@ export default function OEETrends({ records }: Props) {
 
       {/* ── Machine-level OEE Table ───────────────────────────────────────── */}
       {machineTableMerged.length > 0 && (
-        <div style={cardStyle}>
-          <h2 className="text-sm font-semibold mb-3" style={{ color: 'var(--color-text)' }}>Machine OEE — Current vs Comparison Period</h2>
+        <div className={cardCls}>
+          <h2 className="text-sm font-semibold mb-3 text-foreground">Machine OEE — Current vs Comparison Period</h2>
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr>
                   {['Machine', 'Site', 'Current Avg OEE', 'Comparison Avg OEE', 'Delta', 'Readings'].map(h => (
-                    <th key={h} style={tableHeaderStyle}>{h}</th>
+                    <th key={h} className={tableHeaderCls}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {machineTableMerged.map(row => (
                   <tr key={row.machine}>
-                    <td style={tableCellStyle}><span className="font-mono text-xs font-medium">{row.machine}</span></td>
-                    <td style={tableCellStyle}>{row.site}</td>
-                    <td style={{ ...tableCellStyle, fontWeight: 600 }}>{fmt(row.avgOEE)}%</td>
-                    <td style={tableCellStyle}>{row.compAvgOEE !== null ? `${fmt(row.compAvgOEE)}%` : '—'}</td>
-                    <td style={{ ...tableCellStyle, fontWeight: 600, color: deltaColor(row.delta) }}>
+                    <td className={tableCellCls}><span className="font-mono text-xs font-medium">{row.machine}</span></td>
+                    <td className={tableCellCls}>{row.site}</td>
+                    <td className={`${tableCellCls} font-semibold`}>{fmt(row.avgOEE)}%</td>
+                    <td className={tableCellCls}>{row.compAvgOEE !== null ? `${fmt(row.compAvgOEE)}%` : '—'}</td>
+                    <td className={`${tableCellCls} font-semibold ${deltaColorCls(row.delta)}`}>
                       {row.delta !== null ? `${row.delta >= 0 ? '+' : ''}${fmt(row.delta)}pp` : '—'}
                     </td>
-                    <td style={tableCellStyle}>{row.count}</td>
+                    <td className={tableCellCls}>{row.count}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="text-xs mt-2" style={{ color: 'var(--color-muted)' }}>
+          <p className="text-xs mt-2 text-muted-foreground">
             Weighted OEE accounts for runtime behind each reading. Simple average treats each daily reading equally. Currently showing: simple average.
           </p>
         </div>
@@ -409,20 +378,20 @@ export default function OEETrends({ records }: Props) {
 
       {/* ── Export-friendly Summary ───────────────────────────────────────── */}
       {comparison && (
-        <div style={cardStyle} className="print-section">
-          <h2 className="text-sm font-semibold mb-4" style={{ color: 'var(--color-text)' }}>Performance Review Summary</h2>
+        <div className={`${cardCls} print-section`}>
+          <h2 className="text-sm font-semibold mb-4 text-foreground">Performance Review Summary</h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
             <div>
-              <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-muted)' }}>Period Details</p>
-              <p className="text-sm" style={{ color: 'var(--color-text)' }}>
+              <p className="bh-metric-label mb-2">Period Details</p>
+              <p className="text-sm text-foreground">
                 <span className="font-medium">Current:</span> {comparison.periodA.label}
               </p>
-              <p className="text-sm mt-1" style={{ color: 'var(--color-text)' }}>
+              <p className="text-sm mt-1 text-foreground">
                 <span className="font-medium">Comparison:</span> {comparison.periodB.label}
               </p>
-              <p className="text-sm mt-1" style={{ color: 'var(--color-text)' }}>
+              <p className="text-sm mt-1 text-foreground">
                 <span className="font-medium">OEE Change:</span>{' '}
-                <span style={{ color: comparison.delta >= 0 ? 'var(--color-accent)' : 'var(--color-danger)' }}>
+                <span className={comparison.delta >= 0 ? 'text-success' : 'text-danger'}>
                   {comparison.delta >= 0 ? '+' : ''}{fmt(comparison.delta)}pp ({fmt(Math.abs(comparison.pctChange))}%)
                 </span>
               </p>
@@ -430,9 +399,9 @@ export default function OEETrends({ records }: Props) {
             <div>
               {comparison.topImproved.length > 0 && (
                 <div className="mb-3">
-                  <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-accent)' }}>Top Improved</p>
+                  <p className="bh-metric-label text-success mb-1">Top Improved</p>
                   {comparison.topImproved.slice(0, 3).map(m => (
-                    <p key={m.machine} className="text-sm" style={{ color: 'var(--color-text)' }}>
+                    <p key={m.machine} className="text-sm text-foreground">
                       {m.machine}: +{fmt(m.delta)}pp
                     </p>
                   ))}
@@ -440,9 +409,9 @@ export default function OEETrends({ records }: Props) {
               )}
               {comparison.topDeclined.length > 0 && (
                 <div>
-                  <p className="text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-danger)' }}>Top Declined</p>
+                  <p className="bh-metric-label text-danger mb-1">Top Declined</p>
                   {comparison.topDeclined.slice(0, 3).map(m => (
-                    <p key={m.machine} className="text-sm" style={{ color: 'var(--color-text)' }}>
+                    <p key={m.machine} className="text-sm text-foreground">
                       {m.machine}: {fmt(m.delta)}pp
                     </p>
                   ))}
@@ -452,25 +421,18 @@ export default function OEETrends({ records }: Props) {
           </div>
 
           <div className="mb-4">
-            <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--color-muted)' }}>Notes</p>
+            <p className="bh-metric-label mb-2">Notes</p>
             <textarea
               ref={noteRef}
-              className="w-full rounded-lg px-3 py-2 text-sm"
-              style={{
-                background: 'var(--color-background)',
-                border: '1px solid var(--color-border)',
-                color: 'var(--color-text)',
-                minHeight: 80,
-                resize: 'vertical',
-              }}
+              className="w-full rounded-lg px-3 py-2 text-sm bg-background border border-border text-foreground"
+              style={{ minHeight: 80, resize: 'vertical' }}
               placeholder="Add notes for performance review..."
             />
           </div>
 
           <button
             onClick={() => window.print()}
-            className="text-sm px-4 py-2 rounded font-medium"
-            style={{ background: 'var(--color-accent)', color: '#ffffff' }}
+            className="text-sm px-4 py-2 rounded font-medium bg-btn-primary text-btn-primary-foreground hover:bg-btn-primary-accent"
           >
             Print / Save as PDF
           </button>

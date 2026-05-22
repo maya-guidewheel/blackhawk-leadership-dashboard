@@ -87,30 +87,40 @@ export default function AuthGate({ children, onLogin }: { children: ReactNode; o
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center" style={{ backgroundColor: 'var(--color-primary)' }}>
-      <form onSubmit={handleSubmit} className="bh-card p-8 w-full max-w-sm">
+    <div className="min-h-screen flex items-center justify-center bg-background px-4">
+      <form onSubmit={handleSubmit} className="rounded-lg border border-border bg-card p-6 w-full max-w-sm shadow-sm">
         <div className="mb-6">
-          <h1 className="text-xl font-bold mb-1" style={{ color: 'var(--color-primary)' }}>Blackhawk Molding</h1>
-          <p className="text-sm font-semibold" style={{ color: 'var(--color-accent)' }}>Color Change Dashboard</p>
+          <img
+            src="/blackhawk_molding_logo.jpg"
+            alt="Blackhawk Molding"
+            className="h-10 w-auto object-contain mb-3"
+          />
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-subtle-foreground">
+            Powered by Guidewheel
+          </div>
+          <h1 className="text-xl font-semibold text-foreground leading-tight mt-0.5">
+            Leadership Dashboard
+          </h1>
         </div>
-        <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--color-muted)' }}>
+        <label htmlFor="bh-auth-password" className="block text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
           Password
         </label>
         <input
+          id="bh-auth-password"
           type="password"
           value={password}
           onChange={(e) => setPassword(e.target.value)}
-          className="w-full border rounded px-3 py-2 mb-1 focus:outline-none focus:ring-2 text-sm"
-          style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+          className="w-full rounded-md border border-input bg-card px-3 py-2 text-sm text-foreground placeholder:text-pale-foreground focus:outline-none focus:ring-2 focus:ring-btn-primary/30 focus:border-btn-primary"
           autoFocus
           disabled={checking}
         />
-        {error && <p className="text-sm mb-2 mt-1" style={{ color: 'var(--color-danger)' }}>{error}</p>}
+        {error && (
+          <p className="mt-2 text-sm text-danger">{error}</p>
+        )}
         <button
           type="submit"
           disabled={checking}
-          className="w-full mt-4 text-white rounded px-4 py-2.5 font-semibold transition-opacity hover:opacity-90 text-sm disabled:opacity-60"
-          style={{ backgroundColor: 'var(--color-primary)' }}
+          className="w-full mt-4 rounded-md bg-btn-primary text-btn-primary-foreground hover:bg-btn-primary-accent disabled:opacity-60 px-4 py-2.5 text-sm font-medium transition-colors"
         >
           {checking ? 'Checking…' : 'Sign In'}
         </button>

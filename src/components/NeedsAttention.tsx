@@ -14,9 +14,9 @@ function r(n: number): string {
 }
 
 function statusDot(p90: number, threshold: number) {
-  if (p90 <= threshold) return { dot: '●', color: '#16a34a', label: 'On target' }
-  if (p90 <= threshold * 1.25) return { dot: '●', color: '#d97706', label: 'Needs watch' }
-  return { dot: '●', color: '#dc2626', label: 'Off target' }
+  if (p90 <= threshold) return { badgeClass: 'bg-success/10 text-success', label: 'On target' }
+  if (p90 <= threshold * 1.25) return { badgeClass: 'bg-warning/10 text-warning', label: 'Needs watch' }
+  return { badgeClass: 'bg-danger/10 text-danger', label: 'Off target' }
 }
 
 export default function NeedsAttention({ events, deviceData, plantData, weeklyPlantData, threshold }: Props) {
@@ -60,14 +60,14 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
         <div className="grid sm:grid-cols-3 gap-3 mb-4">
           {/* Fastest plant */}
           {fastestPlant && (
-            <div className="bh-card p-4 border-l-4" style={{ borderLeftColor: '#16a34a' }}>
-              <div className="text-[0.6rem] font-bold uppercase tracking-wider mb-1" style={{ color: '#16a34a' }}>
+            <div className="bh-card p-4 border-l-4 border-l-success">
+              <div className="bh-metric-label text-success mb-1">
                 Fastest Plant
               </div>
-              <div className="text-lg font-bold" style={{ color: 'var(--color-primary)' }}>
+              <div className="text-lg font-bold text-foreground">
                 {fastestPlant.plant}
               </div>
-              <div className="text-sm mt-0.5" style={{ color: 'var(--color-muted)' }}>
+              <div className="text-sm mt-0.5 text-muted-foreground">
                 {r(fastestPlant.avg)} min avg · {fastestPlant.count} changeovers
               </div>
             </div>
@@ -75,14 +75,14 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
 
           {/* Slowest plant */}
           {slowestPlant && slowestPlant.plant !== fastestPlant?.plant && (
-            <div className="bh-card p-4 border-l-4" style={{ borderLeftColor: '#dc2626' }}>
-              <div className="text-[0.6rem] font-bold uppercase tracking-wider mb-1" style={{ color: '#dc2626' }}>
+            <div className="bh-card p-4 border-l-4 border-l-danger">
+              <div className="bh-metric-label text-danger mb-1">
                 Slowest Plant
               </div>
-              <div className="text-lg font-bold" style={{ color: 'var(--color-primary)' }}>
+              <div className="text-lg font-bold text-foreground">
                 {slowestPlant.plant}
               </div>
-              <div className="text-sm mt-0.5" style={{ color: 'var(--color-muted)' }}>
+              <div className="text-sm mt-0.5 text-muted-foreground">
                 {r(slowestPlant.avg)} min avg · P90: {r(slowestPlant.p90)} min
               </div>
             </div>
@@ -90,24 +90,24 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
 
           {/* Highest opportunity machine */}
           {topOpportunity ? (
-            <div className="bh-card p-4 border-l-4" style={{ borderLeftColor: '#d97706' }}>
-              <div className="text-[0.6rem] font-bold uppercase tracking-wider mb-1" style={{ color: '#d97706' }}>
+            <div className="bh-card p-4 border-l-4 border-l-warning">
+              <div className="bh-metric-label text-warning mb-1">
                 Highest Opportunity Machine
               </div>
-              <div className="text-lg font-bold font-mono" style={{ color: 'var(--color-primary)' }}>
+              <div className="text-lg font-bold font-mono text-foreground">
                 {topOpportunity.device}
               </div>
-              <div className="text-sm mt-0.5" style={{ color: 'var(--color-muted)' }}>
+              <div className="text-sm mt-0.5 text-muted-foreground">
                 P90: {r(topOpportunity.p90)} min · {r(topOpportunity.gap)} min above target
               </div>
             </div>
           ) : (
-            <div className="bh-card p-4 border-l-4" style={{ borderLeftColor: '#16a34a' }}>
-              <div className="text-[0.6rem] font-bold uppercase tracking-wider mb-1" style={{ color: '#16a34a' }}>
+            <div className="bh-card p-4 border-l-4 border-l-success">
+              <div className="bh-metric-label text-success mb-1">
                 Machine Status
               </div>
-              <div className="text-lg font-bold" style={{ color: '#16a34a' }}>All On Target</div>
-              <div className="text-sm mt-0.5" style={{ color: 'var(--color-muted)' }}>
+              <div className="text-lg font-bold text-success">All On Target</div>
+              <div className="text-sm mt-0.5 text-muted-foreground">
                 All machines P90 ≤ {threshold} min
               </div>
             </div>
@@ -138,7 +138,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                     <td className="font-mono text-xs">{e.device}</td>
                     <td className="text-xs">{formatDate(e.start_dt)}</td>
                     <td className="text-xs">{formatDate(e.end_dt)}</td>
-                    <td className="text-right font-semibold" style={{ color: 'var(--color-danger)' }}>{r(e.duration)}</td>
+                    <td className="text-right font-semibold text-danger">{r(e.duration)}</td>
                     <td className="text-xs">{e.status}</td>
                   </tr>
                 ))}
@@ -167,7 +167,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
               <tbody>
                 {offTarget.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="text-center py-6" style={{ color: 'var(--color-muted)' }}>
+                    <td colSpan={6} className="text-center py-6 text-muted-foreground">
                       All machines within threshold
                     </td>
                   </tr>
@@ -178,10 +178,14 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                       <tr key={d.device}>
                         <td className="font-mono text-xs font-semibold">{d.device}</td>
                         <td>{d.plant}</td>
-                        <td className="text-right font-semibold" style={{ color: 'var(--color-danger)' }}>{r(d.p90)}</td>
+                        <td className="text-right font-semibold text-danger">{r(d.p90)}</td>
                         <td className="text-right">{r(d.avg)}</td>
                         <td className="text-right">{d.count}</td>
-                        <td className="text-xs font-semibold" style={{ color: s.color }}>{s.dot} {s.label}</td>
+                        <td>
+                          <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold ${s.badgeClass}`}>
+                            {s.label}
+                          </span>
+                        </td>
                       </tr>
                     )
                   })
@@ -212,7 +216,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                   <td>{w.plant}</td>
                   <td>{formatShortDate(w.week_start)}</td>
                   <td className="font-mono text-xs">{w.device}</td>
-                  <td className="text-right font-semibold" style={{ color: 'var(--color-danger)' }}>{r(w.duration)}</td>
+                  <td className="text-right font-semibold text-danger">{r(w.duration)}</td>
                   <td className="text-xs">{formatDate(w.start)}</td>
                 </tr>
               ))}

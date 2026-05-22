@@ -15,14 +15,11 @@ export default function DrilldownPanel({ title, events, onClose }: Props) {
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 pt-16 overflow-y-auto">
       <div className="bh-card shadow-2xl w-full max-w-4xl mx-4 mb-16 overflow-hidden">
-        <div
-          className="flex items-center justify-between px-4 py-3"
-          style={{ backgroundColor: 'var(--color-primary)' }}
-        >
-          <h3 className="font-semibold text-sm text-white">{title}</h3>
+        <div className="flex items-center justify-between px-4 py-3 bg-card border-b border-border">
+          <h3 className="font-semibold text-sm text-foreground">{title}</h3>
           <button
             onClick={onClose}
-            className="text-white/60 hover:text-white text-xl leading-none transition-colors"
+            className="text-muted-foreground hover:text-foreground text-xl leading-none transition-colors"
           >
             &times;
           </button>
@@ -55,7 +52,7 @@ export default function DrilldownPanel({ title, events, onClose }: Props) {
             </tbody>
           </table>
           {events.length === 0 && (
-            <p className="text-center py-8" style={{ color: 'var(--color-muted)' }}>No events</p>
+            <p className="text-center py-8 text-muted-foreground">No events</p>
           )}
         </div>
       </div>

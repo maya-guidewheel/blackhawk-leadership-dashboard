@@ -27,10 +27,10 @@ function getCellColor(value: number, max: number): string {
   return 'bg-green-100'
 }
 
-function machineStatus(p90: number, threshold: number) {
-  if (p90 <= threshold) return { dot: '●', color: '#16a34a' }
-  if (p90 <= threshold * 1.25) return { dot: '●', color: '#d97706' }
-  return { dot: '●', color: '#dc2626' }
+function dotColor(p90: number, threshold: number): string {
+  if (p90 <= threshold) return 'text-success'
+  if (p90 <= threshold * 1.25) return 'text-warning'
+  return 'text-danger'
 }
 
 export default function DeviceDrilldown({ deviceData, heatmapData, events, threshold }: Props) {
@@ -50,8 +50,9 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
     setDrillDevice(device)
   }
 
-  const activeBtn = { backgroundColor: 'var(--color-primary)', color: '#fff' }
-  const inactiveBtn = { backgroundColor: '#f0f2f5', color: 'var(--color-muted)', border: '1px solid var(--color-border)' }
+  const baseBtnCls = 'px-2.5 py-1 text-xs rounded font-medium transition-colors border'
+  const activeBtnCls = 'bg-btn-primary text-btn-primary-foreground border-btn-primary'
+  const inactiveBtnCls = 'bg-background-accent text-muted-foreground border-border'
 
   return (
     <section className="mb-8">
@@ -63,7 +64,6 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
           <table className="bh-table">
             <thead>
               <tr className="text-left">
-                <th></th>
                 <th>Device</th>
                 <th>Plant</th>
                 <th className="text-right">Count</th>
@@ -76,15 +76,16 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
             </thead>
             <tbody>
               {deviceData.map(d => {
-                const s = machineStatus(d.p90, threshold)
                 return (
                   <tr
                     key={d.device}
                     className="cursor-pointer"
                     onClick={() => openDeviceDrilldown(d.device)}
                   >
-                    <td className="text-base leading-none" style={{ color: s.color }}>{s.dot}</td>
-                    <td className="font-mono text-xs font-semibold">{d.device}</td>
+                    <td className="font-mono text-xs font-semibold">
+                      <span className={`mr-2 ${dotColor(d.p90, threshold)}`}>●</span>
+                      {d.device}
+                    </td>
                     <td>{d.plant}</td>
                     <td className="text-right">{d.count}</td>
                     <td className="text-right">{r(d.avg)}</td>
@@ -103,7 +104,7 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
       {/* Heatmap */}
       <div className="bh-card p-4 overflow-x-auto">
         <div className="flex items-center gap-4 mb-3">
-          <p className="text-[0.65rem] font-bold uppercase tracking-wider" style={{ color: 'var(--color-muted)' }}>
+          <p className="bh-metric-label">
             Weekly Heatmap
           </p>
           <div className="flex gap-1.5">
@@ -111,8 +112,7 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
               <button
                 key={m}
                 onClick={() => setMetric(m)}
-                className="px-2.5 py-1 text-xs rounded font-medium transition-colors"
-                style={metric === m ? activeBtn : inactiveBtn}
+                className={`${baseBtnCls} ${metric === m ? activeBtnCls : inactiveBtnCls}`}
               >
                 {m === 'avg' ? 'Avg Duration' : m === 'total' ? 'Total Min' : 'Count'}
               </button>
@@ -124,9 +124,9 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
           <table className="text-xs">
             <thead>
               <tr>
-                <th className="px-2 py-1 text-left font-semibold" style={{ color: 'var(--color-muted)' }}>Device</th>
+                <th className="px-2 py-1 text-left font-semibold text-muted-foreground">Device</th>
                 {weeks.map(w => (
-                  <th key={w} className="px-2 py-1 font-semibold whitespace-nowrap" style={{ color: 'var(--color-muted)' }}>
+                  <th key={w} className="px-2 py-1 font-semibold whitespace-nowrap text-muted-foreground">
                     {formatShortDate(w)}
                   </th>
                 ))}
@@ -156,7 +156,7 @@ export default function DeviceDrilldown({ deviceData, heatmapData, events, thres
           </table>
         )}
 
-        <div className="flex items-center gap-2 mt-3 text-xs" style={{ color: 'var(--color-muted)' }}>
+        <div className="flex items-center gap-2 mt-3 text-xs text-muted-foreground">
           <span>Low</span>
           <div className="w-4 h-3 bg-green-100 rounded" />
           <div className="w-4 h-3 bg-green-200 rounded" />

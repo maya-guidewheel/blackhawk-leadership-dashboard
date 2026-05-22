@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import type { EnergyRow, EnergyRates, DeviceSummary } from '../data/types'
 import { computeEnergyByMachine, computeEnergyByPlant, getPlantForMachine } from '../data/energyAggregations'
+import { axisTick, tooltipStyle, tooltipCursorFill, gridStroke, chartColor } from '../utils/chartTheme'
 
 interface Props {
   avgRows: EnergyRow[]
@@ -16,19 +17,25 @@ const DEFAULT_IDLE_THRESHOLD = 50
 const NOISE_FLOOR_KWH = 1
 
 const MACHINE_TYPE_DEFS = [
-  { key: 'M', label: 'Molding', color: '#0693e3' },
-  { key: 'K', label: 'Kleen Peel', color: '#ff6900' },
-  { key: 'L', label: 'Liners', color: '#22c55e' },
+  { key: 'M', label: 'Molding', color: chartColor(0) },
+  { key: 'K', label: 'Kleen Peel', color: chartColor(1) },
+  { key: 'L', label: 'Liners', color: chartColor(2) },
 ] as const
 
 const PLANT_COLORS: Record<string, string> = {
-  Addison: '#0693e3',
-  Mayflower: '#ff6900',
-  Sparks: '#22c55e',
+  Addison: chartColor(0),
+  Mayflower: chartColor(1),
+  Sparks: chartColor(2),
 }
 
-const DANGER = '#cf2e2e'
-const WARN_COLORS = ['#cf2e2e', '#e05c2e', '#e8823a', '#eba94a', '#edba55']
+const DANGER = 'var(--color-danger)'
+const WARN_COLORS = [
+  'var(--color-danger)',
+  chartColor(4),
+  chartColor(5),
+  chartColor(6),
+  chartColor(7),
+]
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -75,11 +82,11 @@ function RateInput({
 }: { label: string; value: number; onChange: (v: number) => void }) {
   return (
     <label className="flex flex-col gap-1">
-      <span className="text-[0.65rem] font-bold uppercase tracking-wider" style={{ color: 'var(--color-muted)' }}>
+      <span className="bh-metric-label">
         {label}
       </span>
       <div className="flex items-center gap-1">
-        <span className="text-sm font-medium" style={{ color: 'var(--color-muted)' }}>$</span>
+        <span className="text-sm font-medium text-muted-foreground">$</span>
         <input
           type="number"
           min="0"
@@ -89,10 +96,9 @@ function RateInput({
             const v = parseFloat(e.target.value)
             if (!isNaN(v) && v >= 0) onChange(v)
           }}
-          className="w-20 px-2 py-1 text-sm border rounded text-right font-mono"
-          style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+          className="w-20 px-2 py-1 text-sm border border-border rounded text-right font-mono text-foreground"
         />
-        <span className="text-xs" style={{ color: 'var(--color-muted)' }}>/kWh</span>
+        <span className="text-xs text-muted-foreground">/kWh</span>
       </div>
     </label>
   )
@@ -103,12 +109,11 @@ function FilterChip({
 }: { label: string; active?: boolean; onClear?: () => void }) {
   return (
     <span
-      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.7rem] font-semibold"
-      style={
+      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.7rem] font-semibold ${
         active
-          ? { background: 'var(--color-secondary)', color: '#fff' }
-          : { background: 'rgba(6,147,227,0.1)', color: 'var(--color-secondary)' }
-      }
+          ? 'bg-btn-primary text-btn-primary-foreground'
+          : 'bg-btn-primary/10 text-btn-primary'
+      }`}
     >
       {label}
       {onClear && (
@@ -282,31 +287,25 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
   const machineChartHeight = Math.max(400, allMachineChartData.length * 26)
   const breakdownChartHeight = Math.max(400, breakdownChartData.length * 28)
 
-  const inputClass = 'border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 bg-white'
-  const inputStyle = { borderColor: 'var(--color-border)', color: 'var(--color-text)' }
-  const labelClass = 'block text-[0.65rem] font-bold uppercase tracking-wider mb-1'
+  const inputClass = 'border border-border rounded px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 bg-card'
+  const labelClass = 'bh-metric-label mb-1 block'
 
   return (
     <section className="mb-10">
 
       {/* ── Section header ── */}
       <div className="flex items-center justify-between mb-5">
-        <h2
-          className="text-lg font-bold tracking-wide flex items-center gap-2"
-          style={{ color: 'var(--color-primary)' }}
-        >
+        <h2 className="text-lg font-bold tracking-wide flex items-center gap-2 text-foreground">
           <span
+            className="bg-btn-primary"
             style={{
               display: 'inline-block', width: 4, height: '1.2em',
-              background: 'var(--color-secondary)', borderRadius: 2,
+              borderRadius: 2,
             }}
           />
           Executive Energy + Cost Analysis
           {(dateFrom || dateTo) && (
-            <span
-              className="text-xs font-normal px-2 py-0.5 rounded-full"
-              style={{ background: '#dbeafe', color: '#1d4ed8' }}
-            >
+            <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-btn-primary/10 text-btn-primary">
               {fmtDateShort(dateFrom)} – {fmtDateShort(dateTo)}
             </span>
           )}
@@ -314,27 +313,17 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
       </div>
 
       {/* ── Filter Bar ── */}
-      <div
-        className="bh-card mb-5 overflow-hidden"
-        style={{ borderLeft: '3px solid var(--color-secondary)' }}
-      >
+      <div className="bh-card mb-5 overflow-hidden border-l-[3px] border-l-btn-primary">
         {/* Active filter summary row */}
-        <div
-          className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-3"
-          style={{ background: '#eef5fd', borderBottom: '1px solid #d0e4f7' }}
-        >
+        <div className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 bg-btn-primary/5 border-b border-btn-primary/15">
           <div className="flex items-center gap-2">
-            <span
-              className="text-[0.65rem] font-bold uppercase tracking-wider"
-              style={{ color: 'var(--color-secondary)' }}
-            >
+            <span className="bh-metric-label text-btn-primary">
               Active Filters
             </span>
             {isFiltered && (
               <button
                 onClick={resetFilters}
-                className="text-[0.65rem] font-semibold underline ml-1"
-                style={{ color: 'var(--color-muted)' }}
+                className="text-[0.65rem] font-semibold underline ml-1 text-muted-foreground"
               >
                 Reset all
               </button>
@@ -361,32 +350,29 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
         {/* Filter inputs */}
         <div className="px-4 py-3 flex flex-wrap gap-5 items-end">
           <div>
-            <label className={labelClass} style={{ color: 'var(--color-muted)' }}>From</label>
+            <label className={labelClass}>From</label>
             <input
               type="date"
               value={dateFrom}
               onChange={e => setDateFrom(e.target.value)}
               className={inputClass}
-              style={inputStyle}
             />
           </div>
           <div>
-            <label className={labelClass} style={{ color: 'var(--color-muted)' }}>To</label>
+            <label className={labelClass}>To</label>
             <input
               type="date"
               value={dateTo}
               onChange={e => setDateTo(e.target.value)}
               className={inputClass}
-              style={inputStyle}
             />
           </div>
           <div>
-            <label className={labelClass} style={{ color: 'var(--color-muted)' }}>Plant</label>
+            <label className={labelClass}>Plant</label>
             <select
               value={plantFilter}
               onChange={e => setPlantFilter(e.target.value)}
               className={inputClass}
-              style={inputStyle}
             >
               {allPlants.map(p => (
                 <option key={p} value={p}>{p === 'All' ? 'All Plants' : p}</option>
@@ -394,13 +380,12 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
             </select>
           </div>
           <div>
-            <label className={labelClass} style={{ color: 'var(--color-muted)' }}>Machine Type</label>
+            <label className={labelClass}>Machine Type</label>
             <div className="flex gap-4 py-1">
               {MACHINE_TYPE_DEFS.map(t => (
                 <label
                   key={t.key}
-                  className="flex items-center gap-1.5 cursor-pointer text-sm select-none"
-                  style={{ color: 'var(--color-text)' }}
+                  className="flex items-center gap-1.5 cursor-pointer text-sm select-none text-foreground"
                 >
                   <input
                     type="checkbox"
@@ -421,26 +406,20 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
       </div>
 
       {/* ── Data Coverage Banner ── */}
-      <div
-        className="bh-card mb-5 p-3 flex items-start gap-3"
-        style={{ borderLeft: '4px solid #0693e3', background: '#eff6ff' }}
-      >
-        <svg className="shrink-0 mt-0.5" width="16" height="16" viewBox="0 0 20 20" fill="#1d4ed8">
+      <div className="bh-card mb-5 p-3 flex items-start gap-3 border-l-4 border-l-btn-primary bg-btn-primary/5">
+        <svg className="shrink-0 mt-0.5 text-btn-primary" width="16" height="16" viewBox="0 0 20 20" fill="currentColor">
           <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
         </svg>
         <div className="min-w-0 flex-1">
-          <div className="text-sm font-semibold" style={{ color: '#1e3a5f' }}>
+          <div className="text-sm font-semibold text-foreground">
             Data current through: {fmtDateFull(dataMaxDate)}
           </div>
-          <div className="text-xs mt-0.5" style={{ color: '#3b5f8a' }}>
+          <div className="text-xs mt-0.5 text-muted-foreground">
             Displaying {filteredRows.length.toLocaleString()} of {avgRows.length.toLocaleString()} energy readings
             across {machineSummaries.length} machine{machineSummaries.length !== 1 ? 's' : ''}
           </div>
           {dateExceedsData && (
-            <div
-              className="mt-2 text-xs font-semibold px-2.5 py-1.5 rounded"
-              style={{ background: '#fef3c7', color: '#92400e' }}
-            >
+            <div className="mt-2 text-xs font-semibold px-2.5 py-1.5 rounded bg-warning/10 text-warning">
               ⚠ Selected end date extends beyond available data. Displayed values only reflect
               data loaded through {fmtDateFull(dataMaxDate)}.
             </div>
@@ -450,10 +429,7 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
 
       {/* ── Rate Inputs + Idle Threshold ── */}
       <div className="bh-card p-4 mb-5">
-        <p
-          className="text-[0.65rem] font-bold uppercase tracking-wider mb-3"
-          style={{ color: 'var(--color-muted)' }}
-        >
+        <p className="bh-metric-label mb-3">
           Estimated industrial energy rates (editable)
         </p>
         <div className="flex flex-wrap gap-6 items-end">
@@ -473,10 +449,7 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
             onChange={v => setRates(r => ({ ...r, Mayflower: v }))}
           />
           <label className="flex flex-col gap-1">
-            <span
-              className="text-[0.65rem] font-bold uppercase tracking-wider"
-              style={{ color: 'var(--color-muted)' }}
-            >
+            <span className="bh-metric-label">
               Idle Threshold
             </span>
             <div className="flex items-center gap-1">
@@ -489,34 +462,30 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                   const v = parseFloat(e.target.value)
                   if (!isNaN(v) && v > 0) setIdleThreshold(v)
                 }}
-                className="w-20 px-2 py-1 text-sm border rounded text-right font-mono"
-                style={{ borderColor: 'var(--color-border)', color: 'var(--color-text)' }}
+                className="w-20 px-2 py-1 text-sm border border-border rounded text-right font-mono text-foreground"
               />
-              <span className="text-xs" style={{ color: 'var(--color-muted)' }}>kWh/day</span>
+              <span className="text-xs text-muted-foreground">kWh/day</span>
             </div>
           </label>
         </div>
 
         {/* Idle threshold explainer */}
-        <div
-          className="mt-4 p-3 rounded-lg text-xs"
-          style={{ background: '#f8fafc', border: '1px solid #e2e8f0' }}
-        >
-          <p className="font-semibold mb-2" style={{ color: 'var(--color-primary)' }}>
+        <div className="mt-4 p-3 rounded-lg text-xs bg-background-accent border border-border">
+          <p className="font-semibold mb-2 text-foreground">
             How the idle threshold works — current setting: {idleThreshold} kWh/day
           </p>
-          <div className="space-y-1" style={{ color: 'var(--color-muted)' }}>
+          <div className="space-y-1 text-muted-foreground">
             <div className="flex items-start gap-2">
-              <span className="font-bold mt-0.5" style={{ color: '#16a34a' }}>●</span>
+              <span className="font-bold mt-0.5 text-success">●</span>
               <span>
-                <strong style={{ color: 'var(--color-text)' }}>Productive / Online:</strong>{' '}
+                <strong className="text-foreground">Productive / Online:</strong>{' '}
                 ≥ {idleThreshold} kWh/day — machine is running active production
               </span>
             </div>
             <div className="flex items-start gap-2">
-              <span className="font-bold mt-0.5" style={{ color: DANGER }}>●</span>
+              <span className="font-bold mt-0.5 text-danger">●</span>
               <span>
-                <strong style={{ color: 'var(--color-text)' }}>Idle:</strong>{' '}
+                <strong className="text-foreground">Idle:</strong>{' '}
                 {NOISE_FLOOR_KWH}–{idleThreshold} kWh/day — machine is powered on but not producing
                 (counted as idle waste)
               </span>
@@ -524,7 +493,7 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
             <div className="flex items-start gap-2">
               <span className="font-bold mt-0.5 opacity-40">○</span>
               <span>
-                <strong style={{ color: 'var(--color-text)' }}>Offline / Excluded:</strong>{' '}
+                <strong className="text-foreground">Offline / Excluded:</strong>{' '}
                 &lt; {NOISE_FLOOR_KWH} kWh/day — below noise floor, excluded from analysis
               </span>
             </div>
@@ -535,61 +504,49 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
       {/* ── A. Executive Summary KPIs ── */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-6">
         <div className="bh-card p-4">
-          <div
-            className="text-[0.65rem] font-bold uppercase tracking-wider mb-2"
-            style={{ color: 'var(--color-muted)' }}
-          >
+          <div className="bh-metric-label mb-2">
             Total Energy Consumed
           </div>
-          <div className="text-2xl font-bold leading-none" style={{ color: 'var(--color-primary)' }}>
+          <div className="text-2xl font-bold leading-none text-foreground">
             {fmtKWh(totalKWh)}
           </div>
-          <div className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>
+          <div className="text-xs mt-1 text-muted-foreground">
             {machineSummaries.length} machines
           </div>
         </div>
 
         <div className="bh-card p-4">
-          <div
-            className="text-[0.65rem] font-bold uppercase tracking-wider mb-2"
-            style={{ color: 'var(--color-muted)' }}
-          >
+          <div className="bh-metric-label mb-2">
             Total Estimated Cost
           </div>
-          <div className="text-2xl font-bold leading-none" style={{ color: 'var(--color-secondary)' }}>
+          <div className="text-2xl font-bold leading-none text-btn-primary">
             {fmtCostFull(totalCost)}
           </div>
-          <div className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>all plants</div>
+          <div className="text-xs mt-1 text-muted-foreground">all plants</div>
         </div>
 
-        <div className="bh-card p-4" style={{ borderLeft: `3px solid ${DANGER}` }}>
-          <div
-            className="text-[0.65rem] font-bold uppercase tracking-wider mb-2"
-            style={{ color: 'var(--color-muted)' }}
-          >
+        <div className="bh-card p-4 border-l-[3px] border-l-danger">
+          <div className="bh-metric-label mb-2">
             Est. Idle Energy Waste
           </div>
-          <div className="text-2xl font-bold leading-none" style={{ color: DANGER }}>
+          <div className="text-2xl font-bold leading-none text-danger">
             {fmtCostFull(totalIdleCost)}
           </div>
-          <div className="text-xs mt-1" style={{ color: 'var(--color-muted)' }}>
+          <div className="text-xs mt-1 text-muted-foreground">
             {totalCost > 0 ? `${((totalIdleCost / totalCost) * 100).toFixed(1)}% of total cost` : '—'}
           </div>
         </div>
 
         <div className="bh-card p-4">
-          <div
-            className="text-[0.65rem] font-bold uppercase tracking-wider mb-2"
-            style={{ color: 'var(--color-muted)' }}
-          >
+          <div className="bh-metric-label mb-2">
             Highest Cost Plant
           </div>
           {highestCostPlant ? (
             <>
-              <div className="text-xl font-bold leading-none" style={{ color: 'var(--color-primary)' }}>
+              <div className="text-xl font-bold leading-none text-foreground">
                 {highestCostPlant.plant}
               </div>
-              <div className="text-xs mt-1 font-semibold" style={{ color: 'var(--color-accent)' }}>
+              <div className="text-xs mt-1 font-semibold text-btn-primary">
                 {fmtCostFull(highestCostPlant.totalCost)}
               </div>
             </>
@@ -597,21 +554,18 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
         </div>
 
         <div className="bh-card p-4">
-          <div
-            className="text-[0.65rem] font-bold uppercase tracking-wider mb-2"
-            style={{ color: 'var(--color-muted)' }}
-          >
+          <div className="bh-metric-label mb-2">
             Most Idle Waste
           </div>
           {mostIdleMachine ? (
             <>
-              <div className="text-base font-bold leading-none" style={{ color: 'var(--color-primary)' }}>
+              <div className="text-base font-bold leading-none text-foreground">
                 {mostIdleMachine.machine}
               </div>
-              <div className="text-xs mt-1 font-semibold" style={{ color: DANGER }}>
+              <div className="text-xs mt-1 font-semibold text-danger">
                 {fmtCostFull(mostIdleMachine.idleCost)} idle
               </div>
-              <div className="text-xs" style={{ color: 'var(--color-muted)' }}>
+              <div className="text-xs text-muted-foreground">
                 {mostIdleMachine.plant}
               </div>
             </>
@@ -625,35 +579,32 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
         <div className="grid lg:grid-cols-2 gap-4">
           {/* Chart */}
           <div className="bh-card p-4">
-            <p
-              className="text-[0.65rem] font-bold uppercase tracking-wider mb-3"
-              style={{ color: 'var(--color-muted)' }}
-            >
+            <p className="bh-metric-label mb-3">
               Cost Breakdown by Plant ($)
             </p>
             <ResponsiveContainer width="100%" height={240}>
               <BarChart data={plantChartData} barCategoryGap="35%">
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e4e9" vertical={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
                 <XAxis
                   dataKey="plant"
-                  tick={{ fontSize: 12, fill: '#6b7280' }}
+                  tick={axisTick}
                   axisLine={false}
                   tickLine={false}
                 />
                 <YAxis
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={axisTick}
                   axisLine={false}
                   tickLine={false}
                   tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
                 />
                 <Tooltip
                   formatter={(v: number) => fmtCostFull(v)}
-                  contentStyle={{ fontSize: 12, borderColor: '#e2e4e9', borderRadius: 6 }}
-                  cursor={{ fill: 'rgba(6,147,227,0.07)' }}
+                  contentStyle={tooltipStyle}
+                  cursor={{ fill: tooltipCursorFill }}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="Total Cost" fill="#0693e3" radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Idle Waste" fill="#cf2e2e" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Total Cost" fill={chartColor(0)} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Idle Waste" fill="var(--color-danger)" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -679,28 +630,19 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                       <td>
                         <span
                           className="inline-block w-2.5 h-2.5 rounded-full mr-2"
-                          style={{ background: PLANT_COLORS[p.plant] ?? '#6b7280' }}
+                          style={{ background: PLANT_COLORS[p.plant] ?? 'var(--color-muted-foreground)' }}
                         />
                         <span className="font-semibold">{p.plant}</span>
                       </td>
                       <td className="text-right">{p.machineCount}</td>
                       <td className="text-right">{Math.round(p.totalKWh).toLocaleString()}</td>
-                      <td
-                        className="text-right font-semibold"
-                        style={{ color: 'var(--color-secondary)' }}
-                      >
+                      <td className="text-right font-semibold text-btn-primary">
                         {fmtCostFull(p.totalCost)}
                       </td>
-                      <td
-                        className="text-right"
-                        style={{ color: p.idleCost > 0 ? DANGER : 'inherit' }}
-                      >
+                      <td className={`text-right ${p.idleCost > 0 ? 'text-danger' : ''}`}>
                         {fmtCostFull(p.idleCost)}
                       </td>
-                      <td
-                        className="text-right font-semibold"
-                        style={{ color: p.idleCost > 0 ? DANGER : 'var(--color-muted)' }}
-                      >
+                      <td className={`text-right font-semibold ${p.idleCost > 0 ? 'text-danger' : 'text-muted-foreground'}`}>
                         {p.totalCost > 0
                           ? `${((p.idleCost / p.totalCost) * 100).toFixed(1)}%`
                           : '—'}
@@ -719,7 +661,7 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
       <section className="mb-6">
         <h3 className="bh-section-title">
           Energy Cost by Machine
-          <span className="ml-2 text-xs font-normal" style={{ color: 'var(--color-muted)' }}>
+          <span className="ml-2 text-xs font-normal text-muted-foreground">
             ({allMachineChartData.length} machines)
           </span>
         </h3>
@@ -730,10 +672,10 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
               layout="vertical"
               margin={{ left: 20, right: 30, top: 4, bottom: 4 }}
             >
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e4e9" horizontal={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} horizontal={false} />
               <XAxis
                 type="number"
-                tick={{ fontSize: 11, fill: '#6b7280' }}
+                tick={axisTick}
                 axisLine={false}
                 tickLine={false}
                 tickFormatter={v => `$${(v / 1000).toFixed(1)}k`}
@@ -741,27 +683,27 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
               <YAxis
                 type="category"
                 dataKey="machine"
-                tick={{ fontSize: 11, fill: '#1a1d21' }}
+                tick={{ ...axisTick, fill: 'var(--color-foreground)' }}
                 axisLine={false}
                 tickLine={false}
                 width={80}
               />
               <Tooltip
                 formatter={(v: number) => [fmtCostFull(v), 'Est. Cost']}
-                contentStyle={{ fontSize: 12, borderColor: '#e2e4e9', borderRadius: 6 }}
-                cursor={{ fill: 'rgba(6,147,227,0.07)' }}
+                contentStyle={tooltipStyle}
+                cursor={{ fill: tooltipCursorFill }}
               />
               <Bar dataKey="cost" radius={[0, 4, 4, 0]}>
                 {allMachineChartData.map((entry, idx) => (
                   <Cell
                     key={entry.machine}
-                    fill={idx < 5 ? WARN_COLORS[idx] : '#0693e3'}
+                    fill={idx < 5 ? WARN_COLORS[idx] : chartColor(0)}
                   />
                 ))}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
-          <p className="text-[0.65rem] mt-2" style={{ color: 'var(--color-muted)' }}>
+          <p className="text-[0.65rem] mt-2 text-muted-foreground">
             Top 5 highlighted in red-orange. Based on average active power × days in selected period.
           </p>
         </div>
@@ -772,12 +714,12 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
         <section className="mb-6">
           <h3 className="bh-section-title">
             Idle vs. Productive Energy Cost by Machine
-            <span className="ml-2 text-xs font-normal" style={{ color: 'var(--color-muted)' }}>
+            <span className="ml-2 text-xs font-normal text-muted-foreground">
               top {breakdownChartData.length} by cost
             </span>
           </h3>
           <div className="bh-card p-4">
-            <p className="text-xs mb-4" style={{ color: 'var(--color-muted)' }}>
+            <p className="text-xs mb-4 text-muted-foreground">
               Stacked view of productive (blue) vs. idle (red) energy cost per machine.
               Machines with significant idle portions represent energy recovery opportunities.
             </p>
@@ -787,10 +729,10 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                 layout="vertical"
                 margin={{ left: 20, right: 30, top: 4, bottom: 4 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e4e9" horizontal={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} horizontal={false} />
                 <XAxis
                   type="number"
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={axisTick}
                   axisLine={false}
                   tickLine={false}
                   tickFormatter={v => `$${(v / 1000).toFixed(1)}k`}
@@ -798,18 +740,18 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                 <YAxis
                   type="category"
                   dataKey="machine"
-                  tick={{ fontSize: 11, fill: '#1a1d21' }}
+                  tick={{ ...axisTick, fill: 'var(--color-foreground)' }}
                   axisLine={false}
                   tickLine={false}
                   width={80}
                 />
                 <Tooltip
                   formatter={(v: number, name: string) => [fmtCostFull(v), name]}
-                  contentStyle={{ fontSize: 12, borderColor: '#e2e4e9', borderRadius: 6 }}
-                  cursor={{ fill: 'rgba(6,147,227,0.07)' }}
+                  contentStyle={tooltipStyle}
+                  cursor={{ fill: tooltipCursorFill }}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="Productive" stackId="a" fill="#0693e3" />
+                <Bar dataKey="Productive" stackId="a" fill={chartColor(0)} />
                 <Bar dataKey="Idle" stackId="a" fill={DANGER} radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -820,18 +762,15 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
       {/* ── E. Idle Energy Waste ── */}
       <section className="mb-6">
         <h3 className="bh-section-title">Idle Energy Waste</h3>
-        <div
-          className="bh-card p-3 mb-4 flex items-center gap-3"
-          style={{ borderLeft: `4px solid ${DANGER}`, background: '#fef2f2' }}
-        >
-          <span className="text-2xl font-bold" style={{ color: DANGER }}>
+        <div className="bh-card p-3 mb-4 flex items-center gap-3 border-l-4 border-l-danger bg-danger/5">
+          <span className="text-2xl font-bold text-danger">
             {fmtCostFull(totalIdleCost)}
           </span>
           <div>
-            <div className="text-sm font-semibold" style={{ color: DANGER }}>
+            <div className="text-sm font-semibold text-danger">
               Estimated Idle Energy Waste
             </div>
-            <div className="text-xs" style={{ color: '#6b7280' }}>
+            <div className="text-xs text-muted-foreground">
               Machines drawing {NOISE_FLOOR_KWH}–{idleThreshold} kWh/day without active
               production · idle threshold: {idleThreshold} kWh/day
             </div>
@@ -841,10 +780,7 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
         <div className="grid lg:grid-cols-2 gap-4">
           {/* Chart */}
           <div className="bh-card p-4">
-            <p
-              className="text-[0.65rem] font-bold uppercase tracking-wider mb-3"
-              style={{ color: 'var(--color-muted)' }}
-            >
+            <p className="bh-metric-label mb-3">
               Idle Waste by Machine — Top 10 ($)
             </p>
             {top10Idle.length > 0 ? (
@@ -854,10 +790,10 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                   layout="vertical"
                   margin={{ left: 20, right: 20, top: 4, bottom: 4 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" stroke="#e2e4e9" horizontal={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} horizontal={false} />
                   <XAxis
                     type="number"
-                    tick={{ fontSize: 11, fill: '#6b7280' }}
+                    tick={axisTick}
                     axisLine={false}
                     tickLine={false}
                     tickFormatter={v => `$${v.toFixed(0)}`}
@@ -865,23 +801,20 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                   <YAxis
                     type="category"
                     dataKey="machine"
-                    tick={{ fontSize: 11, fill: '#1a1d21' }}
+                    tick={{ ...axisTick, fill: 'var(--color-foreground)' }}
                     axisLine={false}
                     tickLine={false}
                     width={80}
                   />
                   <Tooltip
                     formatter={(v: number) => [fmtCostFull(v), 'Idle Cost']}
-                    contentStyle={{ fontSize: 12, borderColor: '#e2e4e9', borderRadius: 6 }}
+                    contentStyle={tooltipStyle}
                   />
                   <Bar dataKey="Idle Cost" fill={DANGER} radius={[0, 4, 4, 0]} />
                 </BarChart>
               </ResponsiveContainer>
             ) : (
-              <p
-                className="text-sm text-center py-10"
-                style={{ color: 'var(--color-muted)' }}
-              >
+              <p className="text-sm text-center py-10 text-muted-foreground">
                 No idle waste detected at current threshold ({idleThreshold} kWh/day).
               </p>
             )}
@@ -904,26 +837,20 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                 <tbody>
                   {top10Idle.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="text-center" style={{ color: 'var(--color-muted)' }}>
+                      <td colSpan={6} className="text-center text-muted-foreground">
                         No idle waste at current threshold
                       </td>
                     </tr>
                   ) : top10Idle.map((m, idx) => (
                     <tr key={m.machine}>
                       <td>
-                        <span
-                          className="font-semibold"
-                          style={{ color: idx < 3 ? DANGER : 'inherit' }}
-                        >
+                        <span className={`font-semibold ${idx < 3 ? 'text-danger' : ''}`}>
                           {m.machine}
                         </span>
                       </td>
-                      <td style={{ color: 'var(--color-muted)' }}>{m.plant}</td>
+                      <td className="text-muted-foreground">{m.plant}</td>
                       <td className="text-right">{Math.round(m.idleKWh).toLocaleString()}</td>
-                      <td
-                        className="text-right font-semibold"
-                        style={{ color: idx < 3 ? DANGER : 'inherit' }}
-                      >
+                      <td className={`text-right font-semibold ${idx < 3 ? 'text-danger' : ''}`}>
                         {fmtCostFull(m.idleCost)}
                       </td>
                       <td className="text-right">{m.idleDays}</td>
@@ -948,28 +875,25 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
 
           {/* Executive insight card */}
           {totalColorChangeCount > 0 && (
-            <div
-              className="bh-card p-4 mb-4"
-              style={{ borderLeft: '4px solid var(--color-accent)', background: '#fff7ed' }}
-            >
-              <div className="text-sm font-semibold mb-2" style={{ color: 'var(--color-accent)' }}>
+            <div className="bh-card p-4 mb-4 border-l-4 border-l-btn-primary bg-btn-primary/5">
+              <div className="text-sm font-semibold mb-2 text-btn-primary">
                 Color Change Energy Impact
               </div>
               <div className="flex flex-wrap items-baseline gap-3 mb-2">
-                <span className="text-3xl font-bold" style={{ color: 'var(--color-primary)' }}>
+                <span className="text-3xl font-bold text-foreground">
                   {totalColorChangeCount.toLocaleString()}
                 </span>
-                <span className="text-base" style={{ color: 'var(--color-muted)' }}>
+                <span className="text-base text-muted-foreground">
                   color changes consumed approximately
                 </span>
-                <span className="text-2xl font-bold" style={{ color: 'var(--color-secondary)' }}>
+                <span className="text-2xl font-bold text-btn-primary">
                   {fmtCostFull(totalColorChangeCost)}
                 </span>
-                <span className="text-base" style={{ color: 'var(--color-muted)' }}>
+                <span className="text-base text-muted-foreground">
                   in energy ({fmtKWh(totalColorChangeKWh)})
                 </span>
               </div>
-              <div className="text-xs" style={{ color: '#78350f' }}>
+              <div className="text-xs text-muted-foreground">
                 Across {efficiencyData.length} color-change machines in the selected period.
                 Cost reflects total machine energy consumption (not changeover time only).
                 Changeover counts use the Changeover tab's current date filter.
@@ -978,7 +902,7 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
           )}
 
           <div className="bh-card p-4">
-            <p className="text-xs mb-4" style={{ color: 'var(--color-muted)' }}>
+            <p className="text-xs mb-4 text-muted-foreground">
               kWh consumed per color change event — machines with high values use more energy
               relative to production output. Only color-change machines with recorded events shown.
             </p>
@@ -992,35 +916,32 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                 layout="vertical"
                 margin={{ left: 20, right: 30, top: 4, bottom: 4 }}
               >
-                <CartesianGrid strokeDasharray="3 3" stroke="#e2e4e9" horizontal={false} />
+                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} horizontal={false} />
                 <XAxis
                   type="number"
-                  tick={{ fontSize: 11, fill: '#6b7280' }}
+                  tick={axisTick}
                   axisLine={false}
                   tickLine={false}
                 />
                 <YAxis
                   type="category"
                   dataKey="machine"
-                  tick={{ fontSize: 11, fill: '#1a1d21' }}
+                  tick={{ ...axisTick, fill: 'var(--color-foreground)' }}
                   axisLine={false}
                   tickLine={false}
                   width={80}
                 />
                 <Tooltip
-                  contentStyle={{ fontSize: 12, borderColor: '#e2e4e9', borderRadius: 6 }}
-                  cursor={{ fill: 'rgba(6,147,227,0.07)' }}
+                  contentStyle={tooltipStyle}
+                  cursor={{ fill: tooltipCursorFill }}
                 />
-                <Bar dataKey="kWh / Change" fill="var(--color-accent)" radius={[0, 4, 4, 0]} />
+                <Bar dataKey="kWh / Change" fill={chartColor(0)} radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
 
             {/* Efficiency detail table with cost per changeover */}
             <div className="mt-5 overflow-x-auto">
-              <p
-                className="text-[0.65rem] font-bold uppercase tracking-wider mb-2"
-                style={{ color: 'var(--color-muted)' }}
-              >
+              <p className="bh-metric-label mb-2">
                 Machine Efficiency Detail
               </p>
               <table className="bh-table">
@@ -1039,22 +960,16 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                   {efficiencyData.map(m => (
                     <tr key={m.machine}>
                       <td className="font-semibold">{m.machine}</td>
-                      <td style={{ color: 'var(--color-muted)' }}>{m.plant}</td>
+                      <td className="text-muted-foreground">{m.plant}</td>
                       <td className="text-right">{m.changeoverCount}</td>
                       <td className="text-right">{Math.round(m.totalKWh).toLocaleString()}</td>
-                      <td
-                        className="text-right font-semibold"
-                        style={{ color: 'var(--color-secondary)' }}
-                      >
+                      <td className="text-right font-semibold text-btn-primary">
                         {fmtCostFull(m.totalCost)}
                       </td>
                       <td className="text-right">
                         {Math.round(m.kWhPerChangeover ?? 0).toLocaleString()}
                       </td>
-                      <td
-                        className="text-right font-semibold"
-                        style={{ color: 'var(--color-accent)' }}
-                      >
+                      <td className="text-right font-semibold text-btn-primary">
                         {m.costPerChangeover ? fmtCostFull(m.costPerChangeover) : '—'}
                       </td>
                     </tr>

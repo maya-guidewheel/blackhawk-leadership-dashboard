@@ -38,12 +38,11 @@ function Chip({
 }) {
   return (
     <span
-      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.7rem] font-semibold"
-      style={
+      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[0.7rem] font-semibold ${
         active
-          ? { background: 'var(--color-secondary)', color: '#fff' }
-          : { background: 'rgba(6,147,227,0.1)', color: 'var(--color-secondary)' }
-      }
+          ? 'bg-btn-primary text-btn-primary-foreground'
+          : 'bg-btn-primary/10 text-btn-primary'
+      }`}
     >
       {label}
       {onClear && (
@@ -97,31 +96,18 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
 
   const isFiltered = filters.plant !== 'All' || filters.device !== 'All' || filters.changeoverType !== 'All'
 
-  const inputClass = 'border rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 bg-white'
-  const inputStyle = { borderColor: 'var(--color-border)', color: 'var(--color-text)' }
-  const labelClass = 'block text-[0.65rem] font-bold uppercase tracking-wider mb-1'
+  const inputClass = 'border border-border rounded px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 bg-card'
+  const labelClass = 'bh-metric-label mb-1 block'
 
   return (
-    <div
-      className="bh-card mb-7 overflow-hidden"
-      style={{ borderLeft: '3px solid var(--color-secondary)' }}
-    >
+    <div className="bh-card mb-7 overflow-hidden border-l-[3px] border-l-btn-primary">
       {/* ── Summary header ─────────────────────────────────────────────── */}
-      <div
-        className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-3"
-        style={{ background: '#eef5fd', borderBottom: '1px solid #d0e4f7' }}
-      >
+      <div className="px-4 py-2.5 flex flex-wrap items-center justify-between gap-3 bg-btn-primary/5 border-b border-btn-primary/15">
         <div className="flex items-center gap-2">
-          <span
-            className="text-[0.65rem] font-bold uppercase tracking-wider"
-            style={{ color: 'var(--color-secondary)' }}
-          >
+          <span className="bh-metric-label text-btn-primary">
             Current View
           </span>
-          <span
-            className="text-xs font-bold px-2 py-0.5 rounded-full"
-            style={{ background: 'var(--color-secondary)', color: '#fff' }}
-          >
+          <span className="text-xs font-bold px-2 py-0.5 rounded-full bg-btn-primary text-btn-primary-foreground">
             {filteredCount.toLocaleString()} events
           </span>
         </div>
@@ -147,8 +133,7 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
           {isFiltered && (
             <button
               onClick={resetAll}
-              className="text-[0.65rem] font-semibold underline"
-              style={{ color: 'var(--color-muted)' }}
+              className="text-[0.65rem] font-semibold underline text-muted-foreground"
             >
               Reset filters
             </button>
@@ -159,30 +144,29 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
       {/* ── Filter inputs ───────────────────────────────────────────────── */}
       <div className="px-4 py-3 flex flex-wrap gap-4 items-end">
         <div>
-          <label className={labelClass} style={{ color: 'var(--color-muted)' }}>From</label>
+          <label className={labelClass}>From</label>
           <input
             type="date"
             value={filters.dateFrom}
             onChange={e => update({ dateFrom: e.target.value })}
             className={inputClass}
-            style={inputStyle}
           />
         </div>
         <div>
-          <label className={labelClass} style={{ color: 'var(--color-muted)' }}>To</label>
+          <label className={labelClass}>To</label>
           <input
             type="date"
             value={filters.dateTo}
             onChange={e => update({ dateTo: e.target.value })}
             className={inputClass}
-            style={inputStyle}
           />
         </div>
         {maxDate && (
           <div className="flex flex-col justify-end">
             <div
-              className="text-[0.65rem] font-semibold px-2.5 py-1.5 rounded"
-              style={{ background: dateExceedsData ? '#fef3c7' : '#eff6ff', color: dateExceedsData ? '#92400e' : '#1e40af' }}
+              className={`text-[0.65rem] font-semibold px-2.5 py-1.5 rounded ${
+                dateExceedsData ? 'bg-warning/10 text-warning' : 'bg-btn-primary/10 text-btn-primary'
+              }`}
             >
               {dateExceedsData
                 ? `⚠ Beyond data: current through ${fmtDateFull(maxDate)}`
@@ -191,46 +175,42 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
           </div>
         )}
         <div>
-          <label className={labelClass} style={{ color: 'var(--color-muted)' }}>Plant</label>
+          <label className={labelClass}>Plant</label>
           <select
             value={filters.plant}
             onChange={e => update({ plant: e.target.value, device: 'All' })}
             className={inputClass}
-            style={inputStyle}
           >
             {plants.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
         <div>
-          <label className={labelClass} style={{ color: 'var(--color-muted)' }}>Machine</label>
+          <label className={labelClass}>Machine</label>
           <select
             value={filters.device}
             onChange={e => update({ device: e.target.value })}
             className={inputClass}
-            style={inputStyle}
           >
             {devices.map(d => <option key={d} value={d}>{d}</option>)}
           </select>
         </div>
         <div>
-          <label className={labelClass} style={{ color: 'var(--color-muted)' }}>Type</label>
+          <label className={labelClass}>Type</label>
           <select
             value={filters.changeoverType}
             onChange={e => update({ changeoverType: e.target.value })}
             className={inputClass}
-            style={inputStyle}
           >
             {CHANGEOVER_TYPES.map(t => <option key={t} value={t}>{t === 'All' ? 'All Types' : t}</option>)}
           </select>
         </div>
         <div>
-          <label className={labelClass} style={{ color: 'var(--color-muted)' }}>Target (min)</label>
+          <label className={labelClass}>Target (min)</label>
           <input
             type="number"
             value={filters.threshold}
             onChange={e => update({ threshold: Number(e.target.value) || 45 })}
             className={`${inputClass} w-20`}
-            style={inputStyle}
             min={1}
           />
         </div>

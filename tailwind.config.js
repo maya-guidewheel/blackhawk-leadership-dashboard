@@ -1,28 +1,18 @@
 /** @type {import('tailwindcss').Config} */
+import guidewheelPreset from './node_modules/@safigen/fd-gw-ui/dist/tailwind.preset.js'
+
 export default {
+  presets: [guidewheelPreset],
   content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
+    './index.html',
+    './src/**/*.{js,ts,jsx,tsx}',
+    './node_modules/@safigen/fd-gw-ui/dist/**/*.{js,cjs,mjs}',
   ],
   theme: {
     extend: {
-      colors: {
-        'bh-primary':    'var(--color-primary)',
-        'bh-secondary':  'var(--color-secondary)',
-        'bh-accent':     'var(--color-accent)',
-        'bh-bg':         'var(--color-background)',
-        'bh-surface':    'var(--color-surface)',
-        'bh-text':       'var(--color-text)',
-        'bh-muted':      'var(--color-muted)',
-        'bh-border':     'var(--color-border)',
-        'bh-danger':     'var(--color-danger)',
-        'bh-warning':    'var(--color-warning)',
-        'bh-success':    'var(--color-success)',
-      },
       maxWidth: {
         dashboard: '1300px',
       },
     },
   },
-  plugins: [],
 }

@@ -6,19 +6,11 @@ import {
 import type { ColorChangeEvent } from '../data/types'
 import { weeklyTrend, weeklyTrendByPlant } from '../data/aggregations'
 import { formatShortDate } from '../utils/dates'
+import { axisTick, tooltipStyle, gridStroke, chartColor } from '../utils/chartTheme'
 
 interface Props {
   events: ColorChangeEvent[]
   threshold?: number
-}
-
-const BRAND_COLORS = ['#0693e3', '#ff6900', '#32373c', '#22c55e', '#8b5cf6']
-
-const tooltipStyle = {
-  fontSize: 12,
-  borderColor: '#e2e4e9',
-  borderRadius: 6,
-  boxShadow: '0 4px 12px rgba(0,0,0,0.08)',
 }
 
 export default function TrendView({ events, threshold }: Props) {
@@ -55,27 +47,27 @@ export default function TrendView({ events, threshold }: Props) {
         <div className="bh-card p-4">
           <ResponsiveContainer width="100%" height={350}>
             <LineChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#e2e4e9" vertical={false} />
-              <XAxis dataKey="week" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
+              <XAxis dataKey="week" tick={axisTick} axisLine={false} tickLine={false} />
+              <YAxis tick={axisTick} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={tooltipStyle} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
               {threshold && (
                 <ReferenceLine
                   y={threshold}
-                  stroke="#ff6900"
+                  stroke="var(--color-warning)"
                   strokeDasharray="5 4"
                   strokeWidth={1.5}
-                  label={{ value: `${threshold}m target`, position: 'insideTopRight', fontSize: 10, fill: '#ff6900' }}
+                  label={{ value: `${threshold}m target`, position: 'insideTopRight', fontSize: 10, fill: 'var(--color-warning)' }}
                 />
               )}
               {plants.map((p, i) => (
                 <Line key={`${p}_avg`} type="monotone" dataKey={`${p}_avg`} name={`${p} Avg`}
-                  stroke={BRAND_COLORS[i % BRAND_COLORS.length]} strokeWidth={2} dot={{ r: 3 }} connectNulls />
+                  stroke={chartColor(i)} strokeWidth={2} dot={{ r: 3 }} connectNulls />
               ))}
               {plants.map((p, i) => (
                 <Line key={`${p}_p90`} type="monotone" dataKey={`${p}_p90`} name={`${p} P90`}
-                  stroke={BRAND_COLORS[i % BRAND_COLORS.length]} strokeWidth={1.5} strokeDasharray="5 5" dot={false} connectNulls />
+                  stroke={chartColor(i)} strokeWidth={1.5} strokeDasharray="5 5" dot={false} connectNulls />
               ))}
             </LineChart>
           </ResponsiveContainer>
@@ -102,24 +94,24 @@ export default function TrendView({ events, threshold }: Props) {
       <div className="bh-card p-4">
         <ResponsiveContainer width="100%" height={300}>
           <LineChart data={chartData}>
-            <CartesianGrid strokeDasharray="3 3" stroke="#e2e4e9" vertical={false} />
-            <XAxis dataKey="week" tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
-            <YAxis tick={{ fontSize: 11, fill: '#6b7280' }} axisLine={false} tickLine={false} />
+            <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
+            <XAxis dataKey="week" tick={axisTick} axisLine={false} tickLine={false} />
+            <YAxis tick={axisTick} axisLine={false} tickLine={false} />
             <Tooltip contentStyle={tooltipStyle} />
             <Legend wrapperStyle={{ fontSize: 11 }} />
             {threshold && (
               <ReferenceLine
                 y={threshold}
-                stroke="#ff6900"
+                stroke="var(--color-warning)"
                 strokeDasharray="5 4"
                 strokeWidth={1.5}
-                label={{ value: `${threshold}m target`, position: 'insideTopRight', fontSize: 10, fill: '#ff6900' }}
+                label={{ value: `${threshold}m target`, position: 'insideTopRight', fontSize: 10, fill: 'var(--color-warning)' }}
               />
             )}
-            <Line type="monotone" dataKey="avg" name="Avg Duration" stroke="#0693e3" strokeWidth={2} dot={{ r: 3 }} />
-            <Line type="monotone" dataKey="p90" name="P90 Duration" stroke="#32373c" strokeWidth={2} dot={{ r: 3 }} strokeDasharray="5 5" />
+            <Line type="monotone" dataKey="avg" name="Avg Duration" stroke={chartColor(0)} strokeWidth={2} dot={{ r: 3 }} />
+            <Line type="monotone" dataKey="p90" name="P90 Duration" stroke={chartColor(1)} strokeWidth={2} dot={{ r: 3 }} strokeDasharray="5 5" />
             {showCount && (
-              <Line type="monotone" dataKey="count" name="Count" stroke="#22c55e" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="count" name="Count" stroke={chartColor(2)} strokeWidth={2} dot={{ r: 3 }} />
             )}
           </LineChart>
         </ResponsiveContainer>
@@ -132,22 +124,21 @@ function TrendControls({ mode, setMode, showCount, setShowCount }: {
   mode: 'all' | 'byPlant'; setMode: (m: 'all' | 'byPlant') => void
   showCount: boolean; setShowCount: (b: boolean) => void
 }) {
-  const activeStyle = { backgroundColor: 'var(--color-primary)', color: '#fff' }
-  const inactiveStyle = { backgroundColor: '#f0f2f5', color: 'var(--color-muted)', border: '1px solid var(--color-border)' }
+  const baseBtn = 'px-2.5 py-1 text-xs rounded font-medium transition-colors border'
+  const activeCls = 'bg-btn-primary text-btn-primary-foreground border-btn-primary'
+  const inactiveCls = 'bg-background-accent text-muted-foreground border-border'
 
   return (
     <div className="flex gap-2 items-center">
       <button
         onClick={() => setMode('all')}
-        className="px-2.5 py-1 text-xs rounded font-medium transition-colors"
-        style={mode === 'all' ? activeStyle : inactiveStyle}
+        className={`${baseBtn} ${mode === 'all' ? activeCls : inactiveCls}`}
       >All Plants</button>
       <button
         onClick={() => setMode('byPlant')}
-        className="px-2.5 py-1 text-xs rounded font-medium transition-colors"
-        style={mode === 'byPlant' ? activeStyle : inactiveStyle}
+        className={`${baseBtn} ${mode === 'byPlant' ? activeCls : inactiveCls}`}
       >By Plant</button>
-      <label className="flex items-center gap-1 text-xs cursor-pointer" style={{ color: 'var(--color-muted)' }}>
+      <label className="flex items-center gap-1 text-xs cursor-pointer text-muted-foreground">
         <input type="checkbox" checked={showCount} onChange={e => setShowCount(e.target.checked)} />
         Count
       </label>

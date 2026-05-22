@@ -70,13 +70,13 @@ export default function WeeklyPlantSummary({ data, events }: Props) {
                   <td className="text-right">{r(d.total)}</td>
                   <td className="text-xs">
                     {r(d.fastest)} min<br />
-                    <span style={{ color: 'var(--color-muted)' }}>
+                    <span className="text-muted-foreground">
                       {d.fastestEvent?.device} {d.fastestEvent ? formatDate(d.fastestEvent.start_dt) : ''}
                     </span>
                   </td>
                   <td className="text-xs">
                     {r(d.slowest)} min<br />
-                    <span style={{ color: 'var(--color-muted)' }}>
+                    <span className="text-muted-foreground">
                       {d.slowestEvent?.device} {d.slowestEvent ? formatDate(d.slowestEvent.start_dt) : ''}
                     </span>
                   </td>
@@ -86,7 +86,7 @@ export default function WeeklyPlantSummary({ data, events }: Props) {
           </table>
         </div>
       </div>
-      <p className="text-xs mt-1.5" style={{ color: 'var(--color-muted)' }}>
+      <p className="text-xs mt-1.5 text-muted-foreground">
         Most recent weeks first · Click a row to see individual events
       </p>
 
