@@ -255,7 +255,9 @@ function ingestOEE(csvText: string, fileName: string) {
 
   db.transaction(() => {
     for (const rec of records) {
-      const hash = rowHash(`${rec.machine}|${rec.date}`)
+      const hash = rec.session_key
+        ? rowHash(rec.session_key)
+        : rowHash(`${rec.machine}|${rec.date}`)
       const r = stmts.insertOEE.run({
         row_hash: hash,
         machine: rec.machine,
@@ -492,24 +494,39 @@ app.get('/api/data/energy/average', requireEnergyAuth, (_req, res) => {
   res.json({ rows: result, total: result.length, lastUpdated: stat.last })
 })
 
+// Re-derive is_tagged from the tags string so existing rows with "No Tag" etc.
+// are corrected without requiring a DB migration.
+const UNTAGGED_SERVER = new Set([
+  'no tag', 'no tags', 'not tagged', 'untagged', 'n/a', 'none', '-', 'undefined', 'null', '',
+])
+function isEffectivelyTaggedServer(tags: string): boolean {
+  const trimmed = (tags || '').trim()
+  if (!trimmed) return false
+  const parts = trimmed.toLowerCase().split(/[,;|]+/).map(t => t.trim())
+  return parts.some(t => t.length > 0 && !UNTAGGED_SERVER.has(t))
+}
+
 // ── API: Get Downtime Events ─────────────────────────────────────────────────
 app.get('/api/data/downtime', (_req, res) => {
   const rows = stmts.getDowntime.all() as any[]
-  const events = rows.map(r => ({
-    start_dt: r.start_dt,
-    end_dt: r.end_dt,
-    duration: r.duration,
-    device: r.device,
-    plant: r.plant,
-    status: r.status || '',
-    calendar_date: r.calendar_date,
-    week_start: r.week_start,
-    shift: r.shift,
-    tags: r.tags || '',
-    is_tagged: r.is_tagged === 1,
-    is_planned: r.is_planned === 1,
-    comments: r.comments || '',
-  }))
+  const events = rows.map(r => {
+    const tags = r.tags || ''
+    return {
+      start_dt: r.start_dt,
+      end_dt: r.end_dt,
+      duration: r.duration,
+      device: r.device,
+      plant: r.plant,
+      status: r.status || '',
+      calendar_date: r.calendar_date,
+      week_start: r.week_start,
+      shift: r.shift,
+      tags,
+      is_tagged: isEffectivelyTaggedServer(tags),
+      is_planned: tags.toLowerCase().includes('planned'),
+      comments: r.comments || '',
+    }
+  })
   const stat = stmts.statsDowntime.get() as { n: number; last: string | null }
   res.json({ events, total: events.length, lastUpdated: stat.last })
 })
@@ -543,16 +560,22 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
   const cleanFirst = csvText.replace(/^﻿/, '').split('\n')[0].toLowerCase()
   let type: 'issues' | 'energy_average' | 'energy_max' | 'oee'
 
-  if (typeHint === 'oee' || cleanFirst.includes('oee') || fileName.toLowerCase().includes('oee')) {
+  const lowerName = fileName.toLowerCase()
+  if (
+    typeHint === 'oee' ||
+    cleanFirst.includes('oee') ||
+    lowerName.includes('oee') ||
+    lowerName.includes('production')
+  ) {
     type = 'oee'
-  } else if (typeHint === 'energy_max' || fileName.toLowerCase().includes('max')) {
+  } else if (typeHint === 'energy_max' || lowerName.includes('max')) {
     type = 'energy_max'
   } else if (
     typeHint === 'energy_average' ||
     typeHint === 'energy' ||
     cleanFirst.includes('energy kwh') ||
-    fileName.toLowerCase().includes('average') ||
-    fileName.toLowerCase().includes('energy')
+    lowerName.includes('average') ||
+    lowerName.includes('energy')
   ) {
     type = 'energy_average'
   } else {

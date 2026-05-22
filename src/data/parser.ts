@@ -4,6 +4,20 @@ import { parseTimestamp, getCalendarDate, getWeekStart } from '../utils/dates'
 
 const CHANGEOVER_TAG = 'change-color/foam/label'
 
+// Tag values that are semantically equivalent to "no tag" — these should NOT
+// be counted as real tags for compliance purposes.
+const UNTAGGED_PLACEHOLDERS = new Set([
+  'no tag', 'no tags', 'not tagged', 'untagged', 'n/a', 'none', '-',
+  'undefined', 'null', '',
+])
+
+function isEffectivelyTagged(tags: string): boolean {
+  const trimmed = (tags || '').trim()
+  if (!trimmed) return false
+  const parts = trimmed.toLowerCase().split(/[,;|]+/).map(t => t.trim())
+  return parts.some(t => t.length > 0 && !UNTAGGED_PLACEHOLDERS.has(t))
+}
+
 function getPlant(device: string): string {
   const first = device.charAt(0)
   switch (first) {
@@ -137,7 +151,7 @@ export function parseDowntimeCSV(csvText: string): DowntimeEvent[] {
     if (!start_dt || !end_dt) continue
 
     const tags = (row.Tags || '').trim()
-    const is_tagged = !!(tags && tags.trim() !== '')
+    const is_tagged = isEffectivelyTagged(tags)
     const is_planned = tags.toLowerCase().includes('planned')
 
     events.push({
@@ -160,42 +174,123 @@ export function parseDowntimeCSV(csvText: string): DowntimeEvent[] {
   return events
 }
 
+// Month abbreviation → number mapping for parsing Guidewheel scheduled-time strings
+const MONTH_MAP: Record<string, number> = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12,
+}
+
+// Parse a Guidewheel scheduled-time string like "22 May 00:00-08:00" or
+// "21 May 16:00 22 May 00:00" into a YYYY-MM-DD date string.
+function parseScheduledDate(raw: string, year = new Date().getFullYear()): string | null {
+  if (!raw) return null
+  // Already ISO
+  if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10)
+  // "DD Mon ..." → take first day-month occurrence
+  const m = raw.match(/\b(\d{1,2})\s+([A-Za-z]{3,})\b/)
+  if (m) {
+    const day = parseInt(m[1], 10)
+    const monthName = m[2].toLowerCase().slice(0, 3)
+    const month = MONTH_MAP[monthName]
+    if (month && day >= 1 && day <= 31) {
+      return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+    }
+  }
+  return null
+}
+
+// Parse OEE value that may be "75.2", "75.2%", or decimal "0.752"
+function parseOEEValue(raw: string): number | null {
+  if (!raw) return null
+  const n = parseFloat(raw.replace('%', '').trim())
+  if (isNaN(n)) return null
+  // Normalize 0–1 range to 0–100
+  if (n > 0 && n <= 1) return n * 100
+  if (n >= 0 && n <= 100) return n
+  return null
+}
+
+// Case-insensitive column lookup with partial-name matching
+function makeGetCol(row: Record<string, string>) {
+  const keys = Object.keys(row)
+  return function getCol(...names: string[]): string {
+    for (const name of names) {
+      const lname = name.toLowerCase()
+      const k = keys.find(k => k.trim().toLowerCase().includes(lname))
+      if (k) return (row[k] || '').trim()
+    }
+    return ''
+  }
+}
+
+// Detect whether a CSV is a Guidewheel Production export based on its headers
+function isProductionFormat(headerRow: Record<string, string>): boolean {
+  const headers = Object.keys(headerRow).map(k => k.toLowerCase().trim())
+  return (
+    headers.some(h => h.includes('scheduled') || h.includes('device')) &&
+    headers.some(h => h.includes('production qty') || h.includes('oee'))
+  )
+}
+
+function parseSimpleOEERows(rows: Record<string, string>[]): OEERecord[] {
+  const records: OEERecord[] = []
+  for (const row of rows) {
+    const getCol = makeGetCol(row)
+    const machine = getCol('machine')
+    const date = getCol('date')
+    const oeeStr = getCol('oee')
+    if (!machine || !date || !oeeStr) continue
+    const oee = parseOEEValue(oeeStr)
+    if (oee === null) continue
+    const avail = parseFloat(getCol('availability')) || null
+    const perf = parseFloat(getCol('performance')) || null
+    const qual = parseFloat(getCol('quality')) || null
+    records.push({ machine, date, oee, availability: avail, performance: perf, quality: qual })
+  }
+  return records
+}
+
+function parseProductionRows(rows: Record<string, string>[]): OEERecord[] {
+  const records: OEERecord[] = []
+  const year = new Date().getFullYear()
+  for (const row of rows) {
+    const getCol = makeGetCol(row)
+    const device = getCol('device', 'machine')
+    if (!device) continue
+    const scheduledTime = getCol('scheduled time', 'scheduled', 'time range')
+    const date = parseScheduledDate(scheduledTime || '', year)
+    if (!date) continue
+    const oeeStr = getCol('oee')
+    if (!oeeStr) continue
+    const oee = parseOEEValue(oeeStr)
+    if (oee === null) continue
+    const product = getCol('product')
+    const batch = getCol('batch')
+    const prodQty = getCol('production qty', 'production quantity', 'qty')
+    // Build a stable dedup key for multi-session-per-day rows
+    const session_key = `${device}|${scheduledTime}|${product}|${batch}|${prodQty}|${oeeStr}`
+    records.push({
+      machine: device,
+      date,
+      oee,
+      availability: null,
+      performance: null,
+      quality: null,
+      session_key,
+    })
+  }
+  return records
+}
+
 export function parseOEECSV(csvText: string): OEERecord[] {
   const result = Papa.parse<Record<string, string>>(csvText, {
     header: true,
     skipEmptyLines: true,
     dynamicTyping: false,
   })
-
-  const records: OEERecord[] = []
-
-  for (const row of result.data) {
-    // Find columns case-insensitively
-    const keys = Object.keys(row)
-    const getCol = (name: string): string => {
-      const k = keys.find(k => k.trim().toLowerCase() === name.toLowerCase())
-      return k ? (row[k] || '').trim() : ''
-    }
-
-    const machine = getCol('machine') || getCol('Machine')
-    const date = getCol('date') || getCol('Date')
-    const oeeStr = getCol('oee') || getCol('OEE')
-
-    if (!machine || !date || !oeeStr) continue
-
-    const oee = parseFloat(oeeStr)
-    if (isNaN(oee) || oee < 0 || oee > 100) continue
-
-    const availStr = getCol('availability') || getCol('Availability')
-    const perfStr = getCol('performance') || getCol('Performance')
-    const qualStr = getCol('quality') || getCol('Quality')
-
-    const availability = availStr ? (isNaN(parseFloat(availStr)) ? null : parseFloat(availStr)) : null
-    const performance = perfStr ? (isNaN(parseFloat(perfStr)) ? null : parseFloat(perfStr)) : null
-    const quality = qualStr ? (isNaN(parseFloat(qualStr)) ? null : parseFloat(qualStr)) : null
-
-    records.push({ machine, date, oee, availability, performance, quality })
+  if (result.data.length === 0) return []
+  if (isProductionFormat(result.data[0])) {
+    return parseProductionRows(result.data)
   }
-
-  return records
+  return parseSimpleOEERows(result.data)
 }

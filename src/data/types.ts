@@ -124,9 +124,10 @@ export interface DowntimeEvent {
 
 export interface OEERecord {
   machine: string
-  date: string     // YYYY-MM-DD
-  oee: number      // 0-100
+  date: string           // YYYY-MM-DD
+  oee: number            // 0-100
   availability: number | null
   performance: number | null
   quality: number | null
+  session_key?: string   // stable dedup key for multi-session-per-day data (production CSV)
 }

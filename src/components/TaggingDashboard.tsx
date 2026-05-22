@@ -26,6 +26,31 @@ function fmtDuration(minutes: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`
 }
 
+function todayISO(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function daysAgoISO(days: number): string {
+  const d = new Date()
+  d.setDate(d.getDate() - days)
+  return d.toISOString().slice(0, 10)
+}
+
+function startOfMonthISO(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+}
+
+function startOfQuarterISO(): string {
+  const d = new Date()
+  const qMonth = Math.floor(d.getMonth() / 3) * 3
+  return `${d.getFullYear()}-${String(qMonth + 1).padStart(2, '0')}-01`
+}
+
+function startOfYearISO(): string {
+  return `${new Date().getFullYear()}-01-01`
+}
+
 const cardStyle: React.CSSProperties = {
   background: 'var(--color-card)',
   border: '1px solid var(--color-border)',
@@ -51,20 +76,59 @@ const tableCellStyle: React.CSSProperties = {
   borderBottom: '1px solid var(--color-border)',
 }
 
+const quickBtnStyle: React.CSSProperties = {
+  fontSize: '0.7rem',
+  fontWeight: 600,
+  padding: '0.25rem 0.6rem',
+  borderRadius: '0.375rem',
+  cursor: 'pointer',
+  border: '1px solid var(--color-border)',
+  background: 'var(--color-background)',
+  color: 'var(--color-muted)',
+}
+
 export default function TaggingDashboard({ events, complianceTarget, onTargetChange }: Props) {
   const [showDefinitions, setShowDefinitions] = useState(false)
   const [warningThreshold, setWarningThreshold] = useState(30)
   const [criticalThreshold, setCriticalThreshold] = useState(50)
 
+  // Date extent of all loaded events
+  const dateExtent = useMemo(() => {
+    if (events.length === 0) return { min: '', max: '' }
+    const dates = events.map(e => e.calendar_date).sort()
+    return { min: dates[0], max: dates[dates.length - 1] }
+  }, [events])
+
+  // Date range filter — empty strings mean "use full extent"
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
+  const effectiveDateFrom = dateFrom || dateExtent.min
+  const effectiveDateTo = dateTo || dateExtent.max
+
+  const rangeExceedsData =
+    effectiveDateTo > dateExtent.max && dateExtent.max !== ''
+
+  // Apply date range filter
+  const filteredEvents = useMemo(
+    () => events.filter(
+      e => e.calendar_date >= effectiveDateFrom && e.calendar_date <= effectiveDateTo
+    ),
+    [events, effectiveDateFrom, effectiveDateTo]
+  )
+
   const compliance = useMemo(
-    () => taggingCompliance(events, complianceTarget),
-    [events, complianceTarget]
+    () => taggingCompliance(filteredEvents, complianceTarget),
+    [filteredEvents, complianceTarget]
   )
   const planned = useMemo(
-    () => plannedDowntimeAnalysis(events, warningThreshold, criticalThreshold),
-    [events, warningThreshold, criticalThreshold]
+    () => plannedDowntimeAnalysis(filteredEvents, warningThreshold, criticalThreshold),
+    [filteredEvents, warningThreshold, criticalThreshold]
   )
-  const reviewCandidates = useMemo(() => taggingReviewCandidates(events), [events])
+  const reviewCandidates = useMemo(
+    () => taggingReviewCandidates(filteredEvents),
+    [filteredEvents]
+  )
 
   const complianceColor = compliance.compliancePct >= complianceTarget
     ? 'var(--color-accent)'
@@ -87,6 +151,72 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
 
   return (
     <div className="space-y-6">
+
+      {/* ── Date Range Filter ─────────────────────────────────────────────── */}
+      <div style={cardStyle}>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>
+              From
+            </label>
+            <input
+              type="date"
+              value={effectiveDateFrom}
+              max={effectiveDateTo}
+              onChange={e => setDateFrom(e.target.value)}
+              className="text-sm rounded px-3 py-1.5"
+              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider mb-1" style={{ color: 'var(--color-muted)' }}>
+              To
+            </label>
+            <input
+              type="date"
+              value={effectiveDateTo}
+              min={effectiveDateFrom}
+              onChange={e => setDateTo(e.target.value)}
+              className="text-sm rounded px-3 py-1.5"
+              style={{ background: 'var(--color-background)', border: '1px solid var(--color-border)', color: 'var(--color-text)' }}
+            />
+          </div>
+
+          {/* Quick range buttons */}
+          <div className="flex flex-wrap gap-1 items-end pb-0.5">
+            {[
+              { label: '7d', fn: () => { setDateFrom(daysAgoISO(7)); setDateTo(todayISO()) } },
+              { label: '30d', fn: () => { setDateFrom(daysAgoISO(30)); setDateTo(todayISO()) } },
+              { label: 'MTD', fn: () => { setDateFrom(startOfMonthISO()); setDateTo(todayISO()) } },
+              { label: 'QTD', fn: () => { setDateFrom(startOfQuarterISO()); setDateTo(todayISO()) } },
+              { label: 'YTD', fn: () => { setDateFrom(startOfYearISO()); setDateTo(todayISO()) } },
+              { label: 'All', fn: () => { setDateFrom(''); setDateTo('') } },
+            ].map(({ label, fn }) => (
+              <button key={label} style={quickBtnStyle} onClick={fn}>{label}</button>
+            ))}
+          </div>
+
+          <div className="ml-auto text-right">
+            <div className="text-xs" style={{ color: 'var(--color-muted)' }}>
+              {filteredEvents.length.toLocaleString()} events in range
+            </div>
+            {dateExtent.max && (
+              <div className="text-xs mt-0.5" style={{ color: 'var(--color-muted)' }}>
+                Data current through: <span className="font-medium" style={{ color: 'var(--color-text)' }}>{dateExtent.max}</span>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {rangeExceedsData && (
+          <div
+            className="mt-3 rounded px-3 py-2 text-xs"
+            style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}
+          >
+            Selected range extends beyond latest available data. Values only reflect data loaded through {dateExtent.max}.
+          </div>
+        )}
+      </div>
 
       {/* ── Summary KPI Cards ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -177,13 +307,9 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
                 background: complianceColor,
               }}
             />
-            {/* Target line */}
             <div
               className="absolute top-0 h-full w-0.5"
-              style={{
-                left: `${complianceTarget}%`,
-                background: 'rgba(255,255,255,0.7)',
-              }}
+              style={{ left: `${complianceTarget}%`, background: 'rgba(255,255,255,0.7)' }}
             />
           </div>
         </div>
@@ -214,7 +340,9 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
         </div>
 
         <p className="mt-3 text-xs" style={{ color: 'var(--color-muted)' }}>
-          Event-based compliance: counts whether each event has a tag. Duration-weighted compliance: measures tagged minutes as % of all downtime minutes.
+          <span className="font-semibold" style={{ color: 'var(--color-text)' }}>Methodology:</span>
+          {' '}Event-based counts whether each event has a tag. Duration-weighted measures tagged minutes as % of all downtime minutes.
+          Events with blank tags or values like "No Tag" / "Not Tagged" are counted as untagged.
         </p>
       </div>
 
@@ -338,7 +466,7 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
           className="rounded-lg px-4 py-3 mb-4 text-xs"
           style={{ background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}
         >
-          These events may need supervisor review based on patterns and duration. This does not prove tagging errors.
+          Tagging accuracy requires operational review. These events are flagged based on patterns, duration, and tag usage. This does not prove tagging errors — supervisor review is required.
         </div>
 
         {reviewCandidates.length === 0 ? (
@@ -415,6 +543,13 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
               <span className="text-xs" style={{ color: 'var(--color-muted)' }}>%</span>
             </div>
           </div>
+        </div>
+
+        <div
+          className="rounded-lg px-4 py-3 mb-4 text-xs"
+          style={{ background: 'rgba(239,68,68,0.05)', border: '1px solid rgba(239,68,68,0.2)', color: 'var(--color-text)' }}
+        >
+          Planned downtime is intended for <strong>no orders, weekends, holidays, or planned shutdowns</strong>. Equipment dependencies, upstream/downstream constraints, and machine failures should not be classified as Planned unless Blackhawk leadership confirms that definition.
         </div>
 
         {/* Planned DT KPI */}
@@ -553,10 +688,7 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
         )}
 
         {/* Definitions callout */}
-        <div
-          className="rounded-lg overflow-hidden"
-          style={{ border: '1px solid var(--color-border)' }}
-        >
+        <div className="rounded-lg overflow-hidden" style={{ border: '1px solid var(--color-border)' }}>
           <button
             className="w-full text-left px-4 py-3 flex items-center justify-between text-sm font-semibold"
             style={{ background: 'var(--color-background)', color: 'var(--color-text)' }}

@@ -192,11 +192,21 @@ export default function OEETrends({ records }: Props) {
         style={{ background: 'var(--color-card)', border: '1px solid var(--color-border)' }}
       >
         <p className="text-base font-semibold mb-2" style={{ color: 'var(--color-text)' }}>
-          OEE data not loaded
+          OEE data not loaded yet
         </p>
-        <p className="text-sm" style={{ color: 'var(--color-muted)' }}>
-          Upload a Guidewheel OEE CSV to enable period comparison.
+        <p className="text-sm mb-4" style={{ color: 'var(--color-muted)' }}>
+          Upload a Guidewheel Production CSV to populate OEE Trends.
         </p>
+        <div
+          className="mx-auto max-w-md rounded-lg px-4 py-3 text-sm text-left"
+          style={{ background: '#eff6ff', border: '1px solid #bfdbfe', color: '#1e40af' }}
+        >
+          <p className="font-semibold mb-1">How to upload:</p>
+          <p>
+            Files with <strong>Production</strong> or <strong>OEE</strong> in the filename will be parsed for
+            scheduled time, machine, production quantity, waste, and OEE. Use the <strong>Upload CSV</strong> button in the top-right corner.
+          </p>
+        </div>
       </div>
     )
   }
