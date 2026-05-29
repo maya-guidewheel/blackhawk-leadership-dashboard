@@ -129,6 +129,35 @@ function FilterChip({
   )
 }
 
+function FilterContext({
+  dateFrom, dateTo, plantFilter, selectedMachineTypes, idleThreshold,
+}: {
+  dateFrom: string
+  dateTo: string
+  plantFilter: string
+  selectedMachineTypes: Set<string>
+  idleThreshold?: number
+}) {
+  const allTypes =
+    selectedMachineTypes.has('M') &&
+    selectedMachineTypes.has('K') &&
+    selectedMachineTypes.has('L')
+  const typeLabel = allTypes
+    ? 'All Machine Types'
+    : MACHINE_TYPE_DEFS.filter(t => selectedMachineTypes.has(t.key)).map(t => t.label).join(', ') || 'None'
+  const parts: string[] = [
+    dateFrom && dateTo ? `${fmtDateShort(dateFrom)} – ${fmtDateShort(dateTo)}` : '',
+    plantFilter === 'All' ? 'All Plants' : plantFilter,
+    typeLabel,
+    idleThreshold !== undefined ? `Idle threshold: ${idleThreshold} kWh/day` : '',
+  ].filter(Boolean)
+  return (
+    <p className="text-[0.7rem] text-muted-foreground font-normal -mt-2 mb-3">
+      {parts.join(' · ')}
+    </p>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
 export default function EnergyDashboard({ avgRows, deviceData }: Props) {
@@ -137,7 +166,10 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
 
   // Compute actual data date range once from loaded rows
   const { dataMinDate, dataMaxDate } = useMemo(() => {
-    const sorted = avgRows.map(r => r.date).filter(Boolean).sort()
+    const sorted = avgRows
+      .map(r => r.date)
+      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
+      .sort()
     return { dataMinDate: sorted[0] ?? '', dataMaxDate: sorted[sorted.length - 1] ?? '' }
   }, [avgRows])
 
@@ -299,8 +331,8 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
     <section className="mb-10">
 
       {/* ── Section header ── */}
-      <div className="flex items-center justify-between mb-5">
-        <h2 className="text-lg font-bold tracking-wide flex items-center gap-2 text-foreground">
+      <div className="mb-5">
+        <h2 className="text-lg font-bold tracking-wide flex items-center gap-2 text-foreground mb-1">
           <span
             className="bg-btn-primary"
             style={{
@@ -309,12 +341,14 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
             }}
           />
           Executive Energy + Cost Analysis
-          {(dateFrom || dateTo) && (
-            <span className="text-xs font-normal px-2 py-0.5 rounded-full bg-btn-primary/10 text-btn-primary">
-              {fmtDateShort(dateFrom)} – {fmtDateShort(dateTo)}
-            </span>
-          )}
         </h2>
+        <FilterContext
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          plantFilter={plantFilter}
+          selectedMachineTypes={selectedMachineTypes}
+          idleThreshold={idleThreshold}
+        />
       </div>
 
       {/* ── Filter Bar ── */}
@@ -429,18 +463,17 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
           </div>
           {noDataInDateRange && (
             <div className="mt-2 text-xs font-semibold px-2.5 py-1.5 rounded bg-danger/10 text-danger">
-              No data available for the selected date range. Available data is {fmtDateFull(dataMinDate)} to {fmtDateFull(dataMaxDate)}.
+              No energy data available for the selected date range. Available energy data is {fmtDateFull(dataMinDate)} to {fmtDateFull(dataMaxDate)}.
             </div>
           )}
           {dateBeforeData && (
             <div className="mt-2 text-xs px-2.5 py-1.5 rounded bg-warning/10 text-warning">
-              ⚠ Selected start date is before available data. Displayed values begin on {fmtDateFull(dataMinDate)}.
+              ⚠ Selected start date is before available energy data. Displayed values begin on {fmtDateFull(dataMinDate)}.
             </div>
           )}
           {dateExceedsData && (
             <div className="mt-2 text-xs px-2.5 py-1.5 rounded bg-warning/10 text-warning">
-              ⚠ Selected end date is after latest uploaded data. Displayed values only reflect
-              data through {fmtDateFull(dataMaxDate)}.
+              ⚠ Selected end date is after latest uploaded energy data. Displayed values only reflect data through {fmtDateFull(dataMaxDate)}.
             </div>
           )}
         </div>
@@ -594,44 +627,18 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
 
       {/* ── B. Energy Cost by Plant ── */}
       <section className="mb-6">
-        <h3 className="bh-section-title">Energy Cost by Plant</h3>
+        <h3 className="bh-section-title mb-1">Energy Cost by Plant</h3>
+        <FilterContext
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          plantFilter={plantFilter}
+          selectedMachineTypes={selectedMachineTypes}
+        />
         <div className="grid lg:grid-cols-2 gap-4">
-          {/* Chart */}
-          <div className="bh-card p-4">
-            <p className="bh-metric-label mb-3">
-              Cost Breakdown by Plant ($)
-            </p>
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={plantChartData} barCategoryGap="35%">
-                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
-                <XAxis
-                  dataKey="plant"
-                  tick={axisTick}
-                  axisLine={false}
-                  tickLine={false}
-                />
-                <YAxis
-                  tick={axisTick}
-                  axisLine={false}
-                  tickLine={false}
-                  tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
-                />
-                <Tooltip
-                  formatter={(v: number) => fmtCostFull(v)}
-                  contentStyle={tooltipStyle}
-                  cursor={{ fill: tooltipCursorFill }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="Total Cost" fill={chartColor(0)} radius={[4, 4, 0, 0]} />
-                <Bar dataKey="Idle Waste" fill="var(--color-danger)" radius={[4, 4, 0, 0]} />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-
-          {/* Table — with idle % column */}
+          {/* Table — left; table is the primary executive view */}
           <div className="bh-card overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="bh-table">
+              <table className="bh-table" style={{ fontSize: '0.875rem' }}>
                 <thead>
                   <tr className="text-left">
                     <th>Plant</th>
@@ -673,17 +680,55 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
               </table>
             </div>
           </div>
+
+          {/* Chart — right */}
+          <div className="bh-card p-4">
+            <p className="bh-metric-label mb-3">
+              Cost Breakdown by Plant ($)
+            </p>
+            <ResponsiveContainer width="100%" height={240}>
+              <BarChart data={plantChartData} barCategoryGap="35%">
+                <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} vertical={false} />
+                <XAxis
+                  dataKey="plant"
+                  tick={axisTick}
+                  axisLine={false}
+                  tickLine={false}
+                />
+                <YAxis
+                  tick={axisTick}
+                  axisLine={false}
+                  tickLine={false}
+                  tickFormatter={v => `$${(v / 1000).toFixed(0)}k`}
+                />
+                <Tooltip
+                  formatter={(v: number) => fmtCostFull(v)}
+                  contentStyle={tooltipStyle}
+                  cursor={{ fill: tooltipCursorFill }}
+                />
+                <Legend wrapperStyle={{ fontSize: 12 }} />
+                <Bar dataKey="Total Cost" fill={chartColor(0)} radius={[4, 4, 0, 0]} />
+                <Bar dataKey="Idle Waste" fill="var(--color-danger)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
         </div>
       </section>
 
       {/* ── C. Energy Cost by Machine — All machines labeled ── */}
       <section className="mb-6">
-        <h3 className="bh-section-title">
+        <h3 className="bh-section-title mb-1">
           Energy Cost by Machine
           <span className="ml-2 text-xs font-normal text-muted-foreground">
             ({allMachineChartData.length} machines)
           </span>
         </h3>
+        <FilterContext
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          plantFilter={plantFilter}
+          selectedMachineTypes={selectedMachineTypes}
+        />
         <div className="bh-card p-4">
           <ResponsiveContainer width="100%" height={machineChartHeight}>
             <BarChart
@@ -731,12 +776,18 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
       {/* ── D. Idle vs. Productive Energy Cost by Machine ── */}
       {breakdownChartData.length > 0 && (
         <section className="mb-6">
-          <h3 className="bh-section-title">
+          <h3 className="bh-section-title mb-1">
             Idle vs. Productive Energy Cost by Machine
             <span className="ml-2 text-xs font-normal text-muted-foreground">
               top {breakdownChartData.length} by cost
             </span>
           </h3>
+          <FilterContext
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            plantFilter={plantFilter}
+            selectedMachineTypes={selectedMachineTypes}
+          />
           <div className="bh-card p-4">
             <p className="text-xs mb-4 text-muted-foreground">
               Stacked view of productive (blue) vs. idle (red) energy cost per machine.
@@ -780,7 +831,14 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
 
       {/* ── E. Idle Energy Waste ── */}
       <section className="mb-6">
-        <h3 className="bh-section-title">Idle Energy Waste</h3>
+        <h3 className="bh-section-title mb-1">Idle Energy Waste</h3>
+        <FilterContext
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          plantFilter={plantFilter}
+          selectedMachineTypes={selectedMachineTypes}
+          idleThreshold={idleThreshold}
+        />
         <div className="bh-card p-3 mb-4 flex items-center gap-3 border-l-4 border-l-danger bg-danger/5">
           <span className="text-2xl font-bold text-danger">
             {fmtCostFull(totalIdleCost)}
@@ -890,7 +948,13 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
       {/* ── F. Energy vs. Production Efficiency ── */}
       {efficiencyData.length > 0 && (
         <section className="mb-6">
-          <h3 className="bh-section-title">Energy vs. Production Efficiency — Color Change Machines</h3>
+          <h3 className="bh-section-title mb-1">Energy vs. Production Efficiency — Color Change Machines</h3>
+          <FilterContext
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            plantFilter={plantFilter}
+            selectedMachineTypes={selectedMachineTypes}
+          />
 
           {/* Executive insight card */}
           {totalColorChangeCount > 0 && (
