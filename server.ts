@@ -94,6 +94,12 @@ db.exec(`
     quality      REAL,
     ingested_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `)
 
 // ── Schema Migrations ──────────────────────────────────────────────────────
@@ -146,6 +152,11 @@ const stmts = {
   statsEnergyMax: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM energy_max'),
   statsDowntime: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM downtime_events'),
   statsOEE: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM oee_data'),
+  getSetting: db.prepare('SELECT value FROM settings WHERE key = @key'),
+  setSetting: db.prepare(`
+    INSERT OR REPLACE INTO settings (key, value, updated_at)
+    VALUES (@key, @value, datetime('now'))
+  `),
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -527,6 +538,35 @@ app.get('/api/admin/diagnostics', (_req, res) => {
       oee_data: { count: oeeStat.n, lastIngested: oeeStat.last, dateMin: oeeDates.min, dateMax: oeeDates.max },
     },
   })
+})
+
+// ── API: Energy Assumptions (persisted rates + idle threshold) ───────────────
+const ENERGY_ASSUMPTIONS_KEY = 'energy_assumptions'
+const DEFAULT_ENERGY_ASSUMPTIONS = { rates: { Sparks: 0.09, Addison: 0.10, Mayflower: 0.08 }, idleThreshold: 50 }
+
+app.get('/api/settings/energy', (_req, res) => {
+  const row = stmts.getSetting.get({ key: ENERGY_ASSUMPTIONS_KEY }) as { value: string } | undefined
+  if (!row) { res.json(DEFAULT_ENERGY_ASSUMPTIONS); return }
+  try {
+    res.json(JSON.parse(row.value))
+  } catch {
+    res.json(DEFAULT_ENERGY_ASSUMPTIONS)
+  }
+})
+
+app.post('/api/settings/energy', (req: Request, res: Response) => {
+  const { rates, idleThreshold } = req.body as { rates?: Record<string, number>; idleThreshold?: number }
+  if (!rates || typeof idleThreshold !== 'number' || idleThreshold < 1) {
+    res.status(400).json({ error: 'Invalid energy assumptions payload.' }); return
+  }
+  for (const plant of ['Sparks', 'Addison', 'Mayflower']) {
+    const v = rates[plant]
+    if (typeof v !== 'number' || v < 0 || v > 10) {
+      res.status(400).json({ error: `Invalid rate for ${plant}.` }); return
+    }
+  }
+  stmts.setSetting.run({ key: ENERGY_ASSUMPTIONS_KEY, value: JSON.stringify({ rates, idleThreshold }) })
+  res.json({ ok: true })
 })
 
 // ── API: Get Issues ─────────────────────────────────────────────────────────

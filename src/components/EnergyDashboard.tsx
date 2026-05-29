@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, Legend,
@@ -6,6 +6,7 @@ import {
 import type { EnergyRow, EnergyRates, DeviceSummary } from '../data/types'
 import { computeEnergyByMachine, computeEnergyByPlant, getPlantForMachine } from '../data/energyAggregations'
 import { axisTick, tooltipStyle, tooltipCursorFill, gridStroke, chartColor } from '../utils/chartTheme'
+import { apiFetch } from '../utils/api'
 
 interface Props {
   avgRows: EnergyRow[]
@@ -163,6 +164,40 @@ function FilterContext({
 export default function EnergyDashboard({ avgRows, deviceData }: Props) {
   const [rates, setRates] = useState<EnergyRates>(DEFAULT_RATES)
   const [idleThreshold, setIdleThreshold] = useState(DEFAULT_IDLE_THRESHOLD)
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'success' | 'error'>('idle')
+
+  // Load persisted assumptions from server on mount; fall back to defaults if none saved.
+  useEffect(() => {
+    apiFetch('/api/settings/energy')
+      .then(r => r.ok ? r.json() : null)
+      .then((data: { rates?: EnergyRates; idleThreshold?: number } | null) => {
+        if (!data) return
+        if (data.rates) setRates(data.rates)
+        if (typeof data.idleThreshold === 'number') setIdleThreshold(data.idleThreshold)
+      })
+      .catch(() => { /* keep defaults */ })
+  }, [])
+
+  const handleSaveAssumptions = useCallback(async () => {
+    setSaveStatus('saving')
+    try {
+      const res = await apiFetch('/api/settings/energy', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rates, idleThreshold }),
+      })
+      if (res.ok) {
+        setSaveStatus('success')
+        setTimeout(() => setSaveStatus('idle'), 4000)
+      } else {
+        setSaveStatus('error')
+      }
+    } catch {
+      setSaveStatus('error')
+    }
+    setShowSaveConfirm(false)
+  }, [rates, idleThreshold])
 
   // Compute actual data date range once from loaded rows
   const { dataMinDate, dataMaxDate } = useMemo(() => {
@@ -519,6 +554,22 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
               <span className="text-xs text-muted-foreground">kWh/day</span>
             </div>
           </label>
+        </div>
+
+        {/* Save button */}
+        <div className="mt-4 flex items-center gap-3">
+          <button
+            onClick={() => { setSaveStatus('idle'); setShowSaveConfirm(true) }}
+            className="px-4 py-1.5 text-sm rounded bg-btn-primary text-btn-primary-foreground hover:bg-btn-primary-accent font-medium"
+          >
+            Save for everyone
+          </button>
+          {saveStatus === 'success' && (
+            <span className="text-xs font-semibold text-success">Energy assumptions saved for all users.</span>
+          )}
+          {saveStatus === 'error' && (
+            <span className="text-xs font-semibold text-danger">Unable to save energy assumptions. Please try again.</span>
+          )}
         </div>
 
         {/* Idle threshold explainer */}
@@ -1062,6 +1113,35 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
             </div>
           </div>
         </section>
+      )}
+
+      {/* ── Save Confirmation Dialog ── */}
+      {showSaveConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bh-card p-6 w-full max-w-sm shadow-xl">
+            <h3 className="text-base font-semibold mb-2 text-foreground">
+              Save updated energy assumptions?
+            </h3>
+            <p className="text-sm text-muted-foreground mb-5">
+              These rates and idle threshold will be used for everyone viewing this dashboard.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowSaveConfirm(false)}
+                className="px-4 py-2 text-sm border border-border rounded text-foreground hover:bg-background-accent"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveAssumptions}
+                disabled={saveStatus === 'saving'}
+                className="px-4 py-2 text-sm rounded bg-btn-primary text-btn-primary-foreground hover:bg-btn-primary-accent disabled:opacity-60 font-medium"
+              >
+                {saveStatus === 'saving' ? 'Saving…' : 'Save for everyone'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </section>
   )
