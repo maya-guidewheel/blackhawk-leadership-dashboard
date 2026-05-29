@@ -220,12 +220,16 @@ export default function OEETrends({ records }: Props) {
             <label className="bh-metric-label mb-1 block">Current Period From</label>
             <input type="date" value={currentFrom} onChange={e => setCurrentFrom(e.target.value)}
               className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
+              min={dataDateRange.min || undefined}
+              max={dataDateRange.max || undefined}
             />
           </div>
           <div>
             <label className="bh-metric-label mb-1 block">Current Period To</label>
             <input type="date" value={currentTo} onChange={e => setCurrentTo(e.target.value)}
               className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
+              min={dataDateRange.min || undefined}
+              max={dataDateRange.max || undefined}
             />
           </div>
           <div>
@@ -254,7 +258,48 @@ export default function OEETrends({ records }: Props) {
               </div>
             </>
           )}
+
+          {/* Available data range indicator */}
+          {(dataDateRange.min || dataDateRange.max) && (
+            <div className="ml-auto self-end pb-0.5 text-right">
+              <div className="text-xs text-muted-foreground">
+                Available data:{' '}
+                <span className="font-medium text-foreground">{dataDateRange.min}</span>
+                {' '}to{' '}
+                <span className="font-medium text-foreground">{dataDateRange.max}</span>
+              </div>
+            </div>
+          )}
         </div>
+
+        {/* Date validation warnings for current period */}
+        {(() => {
+          const noOverlap = Boolean(
+            dataDateRange.min && dataDateRange.max && currentFrom && currentTo &&
+            (currentTo < dataDateRange.min || currentFrom > dataDateRange.max)
+          )
+          const beforeData = !noOverlap && Boolean(dataDateRange.min && currentFrom && currentFrom < dataDateRange.min)
+          const exceedsData = !noOverlap && Boolean(dataDateRange.max && currentTo && currentTo > dataDateRange.max)
+          return (
+            <>
+              {noOverlap && (
+                <div className="mt-3 rounded px-3 py-2 text-xs font-semibold bg-danger/5 border border-danger/30 text-danger">
+                  No data available for the selected current period. Available data is {dataDateRange.min} to {dataDateRange.max}.
+                </div>
+              )}
+              {beforeData && (
+                <div className="mt-3 rounded px-3 py-2 text-xs bg-warning/5 border border-warning/30 text-warning">
+                  ⚠ Current period start is before available data. Displayed values begin on {dataDateRange.min}.
+                </div>
+              )}
+              {exceedsData && (
+                <div className="mt-3 rounded px-3 py-2 text-xs bg-warning/5 border border-warning/30 text-warning">
+                  ⚠ Current period end is after latest uploaded data. Displayed values only reflect data through {dataDateRange.max}.
+                </div>
+              )}
+            </>
+          )
+        })()}
       </div>
 
       {/* ── Period Comparison Cards ───────────────────────────────────────── */}

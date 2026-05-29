@@ -79,8 +79,12 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
   const effectiveDateFrom = dateFrom || dateExtent.min
   const effectiveDateTo = dateTo || dateExtent.max
 
-  const rangeExceedsData =
-    effectiveDateTo > dateExtent.max && dateExtent.max !== ''
+  const noDataInRange = Boolean(
+    dateExtent.min && dateExtent.max && events.length > 0 &&
+    (effectiveDateTo < dateExtent.min || effectiveDateFrom > dateExtent.max)
+  )
+  const dateBeforeData = !noDataInRange && Boolean(dateExtent.min && effectiveDateFrom < dateExtent.min)
+  const rangeExceedsData = !noDataInRange && effectiveDateTo > dateExtent.max && dateExtent.max !== ''
 
   // Apply date range filter
   const filteredEvents = useMemo(
@@ -157,7 +161,8 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
             <input
               type="date"
               value={effectiveDateFrom}
-              max={effectiveDateTo}
+              min={dateExtent.min || undefined}
+              max={dateExtent.max || undefined}
               onChange={e => setDateFrom(e.target.value)}
               className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
             />
@@ -169,7 +174,8 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
             <input
               type="date"
               value={effectiveDateTo}
-              min={effectiveDateFrom}
+              min={dateExtent.min || undefined}
+              max={dateExtent.max || undefined}
               onChange={e => setDateTo(e.target.value)}
               className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
             />
@@ -193,17 +199,29 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
             <div className="text-xs text-muted-foreground">
               {filteredEvents.length.toLocaleString()} events in range
             </div>
-            {dateExtent.max && (
+            {(dateExtent.min || dateExtent.max) && (
               <div className="text-xs mt-0.5 text-muted-foreground">
-                Data current through: <span className="font-medium text-foreground">{dateExtent.max}</span>
+                Available data: <span className="font-medium text-foreground">{dateExtent.min}</span>
+                {' '}to{' '}
+                <span className="font-medium text-foreground">{dateExtent.max}</span>
               </div>
             )}
           </div>
         </div>
 
+        {noDataInRange && (
+          <div className="mt-3 rounded px-3 py-2 text-xs font-semibold bg-danger/5 border border-danger/30 text-danger">
+            No data available for the selected date range. Available data is {dateExtent.min} to {dateExtent.max}.
+          </div>
+        )}
+        {dateBeforeData && (
+          <div className="mt-3 rounded px-3 py-2 text-xs bg-warning/5 border border-warning/30 text-warning">
+            ⚠ Selected start date is before available data. Displayed values begin on {dateExtent.min}.
+          </div>
+        )}
         {rangeExceedsData && (
           <div className="mt-3 rounded px-3 py-2 text-xs bg-warning/5 border border-warning/30 text-warning">
-            Selected range extends beyond latest available data. Values only reflect data loaded through {dateExtent.max}.
+            ⚠ Selected end date is after latest uploaded data. Displayed values only reflect data through {dateExtent.max}.
           </div>
         )}
       </div>

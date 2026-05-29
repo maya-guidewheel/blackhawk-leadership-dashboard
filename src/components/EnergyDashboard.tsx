@@ -222,7 +222,12 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
   // Filter state flags
   const allTypesSelected =
     selectedMachineTypes.has('M') && selectedMachineTypes.has('K') && selectedMachineTypes.has('L')
-  const dateExceedsData = Boolean(dataMaxDate && dateTo > dataMaxDate)
+  const noDataInDateRange = Boolean(
+    dataMinDate && dataMaxDate && avgRows.length > 0 &&
+    (dateTo < dataMinDate || dateFrom > dataMaxDate)
+  )
+  const dateBeforeData = !noDataInDateRange && Boolean(dataMinDate && dateFrom && dateFrom < dataMinDate)
+  const dateExceedsData = !noDataInDateRange && Boolean(dataMaxDate && dateTo > dataMaxDate)
   const isFiltered =
     plantFilter !== 'All' ||
     !allTypesSelected ||
@@ -356,6 +361,8 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
               value={dateFrom}
               onChange={e => setDateFrom(e.target.value)}
               className={inputClass}
+              min={dataMinDate || undefined}
+              max={dataMaxDate || undefined}
             />
           </div>
           <div>
@@ -365,6 +372,8 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
               value={dateTo}
               onChange={e => setDateTo(e.target.value)}
               className={inputClass}
+              min={dataMinDate || undefined}
+              max={dataMaxDate || undefined}
             />
           </div>
           <div>
@@ -412,16 +421,26 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
         </svg>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-semibold text-foreground">
-            Data current through: {fmtDateFull(dataMaxDate)}
+            Available data: {fmtDateFull(dataMinDate)} – {fmtDateFull(dataMaxDate)}
           </div>
           <div className="text-xs mt-0.5 text-muted-foreground">
             Displaying {filteredRows.length.toLocaleString()} of {avgRows.length.toLocaleString()} energy readings
             across {machineSummaries.length} machine{machineSummaries.length !== 1 ? 's' : ''}
           </div>
+          {noDataInDateRange && (
+            <div className="mt-2 text-xs font-semibold px-2.5 py-1.5 rounded bg-danger/10 text-danger">
+              No data available for the selected date range. Available data is {fmtDateFull(dataMinDate)} to {fmtDateFull(dataMaxDate)}.
+            </div>
+          )}
+          {dateBeforeData && (
+            <div className="mt-2 text-xs px-2.5 py-1.5 rounded bg-warning/10 text-warning">
+              ⚠ Selected start date is before available data. Displayed values begin on {fmtDateFull(dataMinDate)}.
+            </div>
+          )}
           {dateExceedsData && (
-            <div className="mt-2 text-xs font-semibold px-2.5 py-1.5 rounded bg-warning/10 text-warning">
-              ⚠ Selected end date extends beyond available data. Displayed values only reflect
-              data loaded through {fmtDateFull(dataMaxDate)}.
+            <div className="mt-2 text-xs px-2.5 py-1.5 rounded bg-warning/10 text-warning">
+              ⚠ Selected end date is after latest uploaded data. Displayed values only reflect
+              data through {fmtDateFull(dataMaxDate)}.
             </div>
           )}
         </div>

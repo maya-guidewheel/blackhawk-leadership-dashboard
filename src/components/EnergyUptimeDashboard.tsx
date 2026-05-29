@@ -189,6 +189,18 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
             )}
           </div>
 
+          {/* Available data range */}
+          {(dataDateRange.min || dataDateRange.max) && (
+            <div className="self-end pb-0.5">
+              <div className="text-xs text-muted-foreground">
+                Available data:{' '}
+                <span className="font-medium text-foreground">{dataDateRange.min}</span>
+                {' '}to{' '}
+                <span className="font-medium text-foreground">{dataDateRange.max}</span>
+              </div>
+            </div>
+          )}
+
           {/* Period 1 */}
           <div>
             <div className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: P1_COLOR }}>
@@ -200,6 +212,8 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
                 <input type="date" value={p1From} onChange={e => setP1From(e.target.value)}
                   className="text-sm rounded px-3 py-1.5 bg-background text-foreground"
                   style={{ border: `1px solid ${P1_COLOR}` }}
+                  min={dataDateRange.min || undefined}
+                  max={dataDateRange.max || undefined}
                 />
               </div>
               <div>
@@ -207,11 +221,18 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
                 <input type="date" value={p1To} onChange={e => setP1To(e.target.value)}
                   className="text-sm rounded px-3 py-1.5 bg-background text-foreground"
                   style={{ border: `1px solid ${P1_COLOR}` }}
+                  min={dataDateRange.min || undefined}
+                  max={dataDateRange.max || undefined}
                 />
               </div>
             </div>
             {p1Metrics && (
               <p className="text-xs mt-1 text-muted-foreground">{p1Metrics.days} days of data</p>
+            )}
+            {!p1Metrics && p1From && p1To && dataDateRange.min && dataDateRange.max && (
+              <p className="text-xs mt-1 text-danger">
+                No data in selected period. Available: {dataDateRange.min} to {dataDateRange.max}.
+              </p>
             )}
           </div>
 
@@ -226,6 +247,8 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
                 <input type="date" value={p2From} onChange={e => setP2From(e.target.value)}
                   className="text-sm rounded px-3 py-1.5 bg-background text-foreground"
                   style={{ border: `1px solid ${P2_COLOR}` }}
+                  min={dataDateRange.min || undefined}
+                  max={dataDateRange.max || undefined}
                 />
               </div>
               <div>
@@ -233,11 +256,18 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
                 <input type="date" value={p2To} onChange={e => setP2To(e.target.value)}
                   className="text-sm rounded px-3 py-1.5 bg-background text-foreground"
                   style={{ border: `1px solid ${P2_COLOR}` }}
+                  min={dataDateRange.min || undefined}
+                  max={dataDateRange.max || undefined}
                 />
               </div>
             </div>
             {p2Metrics && (
               <p className="text-xs mt-1 text-muted-foreground">{p2Metrics.days} days of data</p>
+            )}
+            {!p2Metrics && p2From && p2To && dataDateRange.min && dataDateRange.max && (
+              <p className="text-xs mt-1 text-danger">
+                No data in selected period. Available: {dataDateRange.min} to {dataDateRange.max}.
+              </p>
             )}
           </div>
 

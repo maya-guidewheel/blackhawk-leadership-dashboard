@@ -66,13 +66,23 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
       .map(e => e.device)
   )].sort()
 
+  const minDate = useMemo(() => {
+    if (events.length === 0) return ''
+    return events.map(e => e.calendar_date).sort()[0]
+  }, [events])
+
   const maxDate = useMemo(() => {
     if (events.length === 0) return ''
     const dates = events.map(e => e.calendar_date).sort()
     return dates[dates.length - 1]
   }, [events])
 
-  const dateExceedsData = maxDate && filters.dateTo > maxDate
+  const noDataInRange = Boolean(
+    minDate && maxDate && events.length > 0 &&
+    (filters.dateTo < minDate || filters.dateFrom > maxDate)
+  )
+  const dateBeforeData = !noDataInRange && Boolean(minDate && filters.dateFrom < minDate)
+  const dateExceedsData = !noDataInRange && Boolean(maxDate && filters.dateTo > maxDate)
 
   function update(partial: Partial<FilterState>) {
     const next = { ...filters, ...partial }
@@ -150,6 +160,8 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
             value={filters.dateFrom}
             onChange={e => update({ dateFrom: e.target.value })}
             className={inputClass}
+            min={minDate || undefined}
+            max={maxDate || undefined}
           />
         </div>
         <div>
@@ -159,18 +171,14 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
             value={filters.dateTo}
             onChange={e => update({ dateTo: e.target.value })}
             className={inputClass}
+            min={minDate || undefined}
+            max={maxDate || undefined}
           />
         </div>
-        {maxDate && (
+        {(minDate || maxDate) && (
           <div className="flex flex-col justify-end">
-            <div
-              className={`text-[0.65rem] font-semibold px-2.5 py-1.5 rounded ${
-                dateExceedsData ? 'bg-warning/10 text-warning' : 'bg-btn-primary/10 text-btn-primary'
-              }`}
-            >
-              {dateExceedsData
-                ? `⚠ Beyond data: current through ${fmtDateFull(maxDate)}`
-                : `Data current through: ${fmtDateFull(maxDate)}`}
+            <div className="text-[0.65rem] font-semibold px-2.5 py-1.5 rounded bg-btn-primary/10 text-btn-primary">
+              Available data: {fmtDateLabel(minDate)} – {fmtDateLabel(maxDate)}
             </div>
           </div>
         )}
@@ -215,6 +223,22 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
           />
         </div>
       </div>
+
+      {noDataInRange && (
+        <div className="px-4 pb-3 text-xs font-semibold text-danger">
+          No data available for the selected date range. Available data is {fmtDateLabel(minDate)} to {fmtDateLabel(maxDate)}.
+        </div>
+      )}
+      {dateBeforeData && (
+        <div className="px-4 pb-3 text-xs text-warning">
+          ⚠ Selected start date is before available data. Displayed values begin on {fmtDateLabel(minDate)}.
+        </div>
+      )}
+      {dateExceedsData && (
+        <div className="px-4 pb-3 text-xs text-warning">
+          ⚠ Selected end date is after latest uploaded data. Displayed values only reflect data through {fmtDateLabel(maxDate)}.
+        </div>
+      )}
     </div>
   )
 }
