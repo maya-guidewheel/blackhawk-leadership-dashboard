@@ -27,6 +27,10 @@ export function clearAuth(): void {
   localStorage.removeItem(AUTH_KEY)
 }
 
+export function clearEnergyAuth(): void {
+  try { sessionStorage.removeItem(ENERGY_AUTH_KEY) } catch { /* ignore */ }
+}
+
 export async function apiFetch(url: string, options: RequestInit = {}): Promise<Response> {
   const token = getToken()
   const headers = new Headers(options.headers as HeadersInit)
@@ -40,11 +44,15 @@ export async function apiFetch(url: string, options: RequestInit = {}): Promise<
 
   const response = await fetch(url, { ...options, headers })
 
-  // Only treat 401 as main-auth expiry for non-energy endpoints.
-  // Energy 401 means the user hasn't passed EnergyGate yet — that's expected.
-  if (response.status === 401 && !url.startsWith('/api/data/energy') && url !== '/api/auth/energy') {
-    clearAuth()
-    window.dispatchEvent(new Event('auth:expired'))
+  if (response.status === 401) {
+    if (url.startsWith('/api/data/energy')) {
+      // Stale energy session (server restarted) — clear token so EnergyGate re-shows login.
+      clearEnergyAuth()
+      window.dispatchEvent(new Event('energy:expired'))
+    } else if (url !== '/api/auth/energy') {
+      clearAuth()
+      window.dispatchEvent(new Event('auth:expired'))
+    }
   }
   return response
 }

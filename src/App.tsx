@@ -47,6 +47,8 @@ interface UploadFeedback {
   type: string
   rowsAdded: number
   duplicatesSkipped: number
+  dataMin?: string
+  dataMax?: string
   diagnostics?: OEEDiagnostics
 }
 
@@ -430,6 +432,11 @@ export default function App() {
                   ×
                 </button>
               </div>
+              {uploadFeedback.rowsAdded === 0 && uploadFeedback.duplicatesSkipped > 0 && uploadFeedback.dataMin && (
+                <div className="mt-1 text-xs text-muted-foreground">
+                  Existing dataset: <span className="font-medium text-foreground">{uploadFeedback.dataMin}</span> to <span className="font-medium text-foreground">{uploadFeedback.dataMax}</span>. Data is current — no new records to add.
+                </div>
+              )}
               {uploadFeedback.rowsAdded === 0 && uploadFeedback.type === 'oee' && uploadFeedback.diagnostics && (
                 <div className="mt-2 text-xs space-y-1 text-muted-foreground">
                   <div><span className="font-semibold text-foreground">Detected format:</span> {uploadFeedback.diagnostics.format} ({uploadFeedback.diagnostics.rowsRead} rows read)</div>

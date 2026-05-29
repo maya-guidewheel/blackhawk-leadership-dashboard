@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import {
   ComposedChart, Bar, Line, XAxis, YAxis, CartesianGrid,
   Tooltip, Legend, ResponsiveContainer, BarChart
@@ -38,25 +38,30 @@ export default function EnergyUptimeDashboard({ energyRows, downtimeEvents }: Pr
     return { min: dates[0], max: dates[dates.length - 1] }
   }, [energyRows])
 
-  // Default periods: split the data range in half
-  const [p1From, setP1From] = useState(() => dataDateRange.min)
-  const [p1To, setP1To] = useState(() => {
-    if (!dataDateRange.min || !dataDateRange.max) return ''
+  // Default periods: split the data range in half.
+  // Start empty — useEffect sets them once dataDateRange is populated.
+  // Lazy initializers won't work here because energyRows arrives async after mount.
+  const [p1From, setP1From] = useState('')
+  const [p1To, setP1To] = useState('')
+  const [p2From, setP2From] = useState('')
+  const [p2To, setP2To] = useState('')
+  const [periodsInitialized, setPeriodsInitialized] = useState(false)
+
+  useEffect(() => {
+    if (periodsInitialized || !dataDateRange.min || !dataDateRange.max) return
     const from = new Date(dataDateRange.min)
     const to = new Date(dataDateRange.max)
     const mid = new Date((from.getTime() + to.getTime()) / 2)
-    return mid.toISOString().slice(0, 10)
-  })
-  const [p2From, setP2From] = useState(() => {
-    if (!dataDateRange.min || !dataDateRange.max) return ''
-    const from = new Date(dataDateRange.min)
-    const to = new Date(dataDateRange.max)
-    const mid = new Date((from.getTime() + to.getTime()) / 2)
-    const next = new Date(mid)
-    next.setDate(next.getDate() + 1)
-    return next.toISOString().slice(0, 10)
-  })
-  const [p2To, setP2To] = useState(() => dataDateRange.max)
+    const midStr = mid.toISOString().slice(0, 10)
+    const nextDay = new Date(mid)
+    nextDay.setDate(nextDay.getDate() + 1)
+    const nextDayStr = nextDay.toISOString().slice(0, 10)
+    setP1From(dataDateRange.min)
+    setP1To(midStr)
+    setP2From(nextDayStr)
+    setP2To(dataDateRange.max)
+    setPeriodsInitialized(true)
+  }, [dataDateRange, periodsInitialized])
 
   // Downtime hours per day for selected machine
   const downtimeByDate = useMemo(() => {

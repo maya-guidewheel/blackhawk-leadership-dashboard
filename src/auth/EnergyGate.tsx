@@ -1,4 +1,4 @@
-import { useState, type ReactNode, type FormEvent } from 'react'
+import { useState, useEffect, type ReactNode, type FormEvent } from 'react'
 import { apiFetch } from '../utils/api'
 
 const ENERGY_AUTH_KEY = 'bh_energy_auth'
@@ -26,6 +26,15 @@ export default function EnergyGate({ children, onAuth }: { children: ReactNode; 
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [checking, setChecking] = useState(false)
+
+  // When the server restarts, apiFetch detects a 401 on energy routes, clears
+  // the stale sessionStorage token, and fires this event. Reset authed so the
+  // login form reappears instead of showing an empty "no data" state.
+  useEffect(() => {
+    function onExpired() { setAuthed(false) }
+    window.addEventListener('energy:expired', onExpired)
+    return () => window.removeEventListener('energy:expired', onExpired)
+  }, [])
 
   if (authed) return <>{children}</>
 

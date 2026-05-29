@@ -501,6 +501,34 @@ app.get('/api/status', (_req, res) => {
   })
 })
 
+// ── API: Admin Diagnostics ───────────────────────────────────────────────────
+// Returns record counts and date ranges for all tables. Useful for debugging
+// empty-tab issues after deployment/restart without needing DB access.
+app.get('/api/admin/diagnostics', (_req, res) => {
+  const issueStat = stmts.statsIssues.get() as { n: number; last: string | null }
+  const avgStat = stmts.statsEnergyAvg.get() as { n: number; last: string | null }
+  const maxStat = stmts.statsEnergyMax.get() as { n: number; last: string | null }
+  const downtimeStat = stmts.statsDowntime.get() as { n: number; last: string | null }
+  const oeeStat = stmts.statsOEE.get() as { n: number; last: string | null }
+
+  const issueDates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM issues').get() as { min: string | null; max: string | null }
+  const avgDates = db.prepare('SELECT MIN(date) as min, MAX(date) as max FROM energy_average').get() as { min: string | null; max: string | null }
+  const downtimeDates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM downtime_events').get() as { min: string | null; max: string | null }
+  const oeeDates = db.prepare('SELECT MIN(date) as min, MAX(date) as max FROM oee_data').get() as { min: string | null; max: string | null }
+
+  res.json({
+    dbPath: process.env.NODE_ENV !== 'production' ? DB_PATH : '(hidden in production)',
+    activeEnergySessions: energySessions.size,
+    tables: {
+      issues: { count: issueStat.n, lastIngested: issueStat.last, dateMin: issueDates.min, dateMax: issueDates.max },
+      energy_average: { count: avgStat.n, lastIngested: avgStat.last, dateMin: avgDates.min, dateMax: avgDates.max },
+      energy_max: { count: maxStat.n, lastIngested: maxStat.last },
+      downtime_events: { count: downtimeStat.n, lastIngested: downtimeStat.last, dateMin: downtimeDates.min, dateMax: downtimeDates.max },
+      oee_data: { count: oeeStat.n, lastIngested: oeeStat.last, dateMin: oeeDates.min, dateMax: oeeDates.max },
+    },
+  })
+})
+
 // ── API: Get Issues ─────────────────────────────────────────────────────────
 app.get('/api/data/issues', (_req, res) => {
   const rows = stmts.getIssues.all() as any[]
@@ -645,6 +673,20 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
     } else {
       result = ingestEnergy(csvText, fileName, type)
     }
+
+    // When all uploaded records are duplicates, include the existing data range
+    // so the client can show "data current through X" instead of a blank success.
+    if (result.rowsAdded === 0 && (result.duplicatesSkipped as number) > 0) {
+      if (type === 'energy_average' || type === 'energy_max') {
+        const tbl = type === 'energy_average' ? 'energy_average' : 'energy_max'
+        const dates = db.prepare(`SELECT MIN(date) as min, MAX(date) as max FROM ${tbl}`).get() as { min: string | null; max: string | null }
+        result = { ...result, dataMin: dates.min, dataMax: dates.max }
+      } else if (type === 'issues') {
+        const dates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM issues').get() as { min: string | null; max: string | null }
+        result = { ...result, dataMin: dates.min, dataMax: dates.max }
+      }
+    }
+
     res.json({ ...result, type, fileName })
   } catch (err: unknown) {
     // Log full error server-side; return generic message to client.
