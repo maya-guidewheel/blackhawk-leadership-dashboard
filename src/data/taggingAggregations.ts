@@ -338,9 +338,18 @@ export function taggingReviewCandidates(events: DowntimeEvent[]): ReviewEvent[] 
       reasons.push('Long untagged event (> 60 minutes)')
     }
     if (e.tags) {
-      const tagParts = e.tags.split(/[,;]+/).map(t => t.trim()).filter(Boolean)
-      const distinctTags = new Set(tagParts)
-      if (distinctTags.size > 2) {
+      const tagParts = e.tags.split(/[,;]+/).map(t => t.trim()).filter(t => t.length > 0)
+      const tagCounts = new Map<string, number>()
+      for (const t of tagParts) {
+        const key = t.toLowerCase()
+        tagCounts.set(key, (tagCounts.get(key) ?? 0) + 1)
+      }
+      const doubled = Array.from(tagCounts.entries()).filter(([, n]) => n > 1)
+      if (doubled.length > 0) {
+        reasons.push(`Double-tagged: "${doubled.map(([t]) => t).join('", "')}" appears multiple times`)
+      }
+      const distinctTags = new Set(tagParts.map(t => t.toLowerCase()))
+      if (distinctTags.size > 2 && doubled.length === 0) {
         reasons.push(`Multiple tags (${distinctTags.size}) — may need review`)
       }
     }
@@ -351,4 +360,24 @@ export function taggingReviewCandidates(events: DowntimeEvent[]): ReviewEvent[] 
   }
 
   return results
+}
+
+export const REVIEW_REASON_CATEGORIES = [
+  { key: 'all', label: 'All reasons' },
+  { key: 'double-tagged', label: 'Double-tagged issue' },
+  { key: 'long-untagged', label: 'Long untagged event' },
+  { key: 'planned-offshift', label: 'Planned on off-shift' },
+  { key: 'long-planned', label: 'Unusually long planned' },
+  { key: 'multiple-tags', label: 'Multiple tags' },
+] as const
+
+export function matchesReasonCategory(reasons: string[], category: string): boolean {
+  if (category === 'all') return true
+  const lower = reasons.map(r => r.toLowerCase())
+  if (category === 'double-tagged') return lower.some(r => r.startsWith('double-tagged'))
+  if (category === 'long-untagged') return lower.some(r => r.startsWith('long untagged'))
+  if (category === 'planned-offshift') return lower.some(r => r.startsWith('planned downtime on off-shift'))
+  if (category === 'long-planned') return lower.some(r => r.startsWith('unusually long planned'))
+  if (category === 'multiple-tags') return lower.some(r => r.startsWith('multiple tags'))
+  return true
 }

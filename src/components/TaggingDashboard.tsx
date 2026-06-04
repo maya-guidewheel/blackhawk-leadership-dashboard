@@ -7,6 +7,8 @@ import {
   taggingCompliance,
   plannedDowntimeAnalysis,
   taggingReviewCandidates,
+  REVIEW_REASON_CATEGORIES,
+  matchesReasonCategory,
 } from '../data/taggingAggregations'
 import { axisTick, tooltipStyle, gridStroke } from '../utils/chartTheme'
 
@@ -64,6 +66,8 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
   const [showDefinitions, setShowDefinitions] = useState(false)
   const [warningThreshold, setWarningThreshold] = useState(30)
   const [criticalThreshold, setCriticalThreshold] = useState(50)
+  const [reviewPlantFilter, setReviewPlantFilter] = useState('All')
+  const [reviewReasonFilter, setReviewReasonFilter] = useState('all')
 
   // Date extent of all loaded events
   const dateExtent = useMemo(() => {
@@ -102,10 +106,23 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
     () => plannedDowntimeAnalysis(filteredEvents, warningThreshold, criticalThreshold),
     [filteredEvents, warningThreshold, criticalThreshold]
   )
-  const reviewCandidates = useMemo(
+  const allReviewCandidates = useMemo(
     () => taggingReviewCandidates(filteredEvents),
     [filteredEvents]
   )
+
+  const reviewCandidates = useMemo(() => {
+    return allReviewCandidates.filter(e => {
+      if (reviewPlantFilter !== 'All' && e.plant !== reviewPlantFilter) return false
+      if (!matchesReasonCategory(e.reasons, reviewReasonFilter)) return false
+      return true
+    })
+  }, [allReviewCandidates, reviewPlantFilter, reviewReasonFilter])
+
+  const reviewPlants = useMemo(() => {
+    const plants = Array.from(new Set(allReviewCandidates.map(e => e.plant))).sort()
+    return ['All', ...plants]
+  }, [allReviewCandidates])
 
   const complianceColorCls = compliance.compliancePct >= complianceTarget
     ? 'text-success'
@@ -447,58 +464,108 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
 
       {/* ── Tagging Review Candidates ─────────────────────────────────────── */}
       <div className={cardCls}>
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-3">
           <h2 className="text-sm font-semibold text-foreground">
             Tagging Review Candidates
             <span className={`ml-2 text-xs font-normal px-2 py-0.5 rounded-full ${
-              reviewCandidates.length > 0 ? 'bg-warning/10 text-warning' : 'bg-success/5 text-success'
+              allReviewCandidates.length > 0 ? 'bg-warning/10 text-warning' : 'bg-success/5 text-success'
             }`}>
-              {reviewCandidates.length} events
+              {allReviewCandidates.length} total
             </span>
           </h2>
         </div>
 
-        <div className="rounded-lg px-4 py-3 mb-4 text-xs bg-warning/5 border border-warning/30 text-warning">
-          Tagging accuracy requires operational review. These events are flagged based on patterns, duration, and tag usage. This does not prove tagging errors — supervisor review is required.
+        {/* Filters */}
+        <div className="flex flex-wrap items-end gap-4 mb-3 pb-3 border-b border-border">
+          <div>
+            <label className="bh-metric-label mb-1 block">Plant</label>
+            <select
+              value={reviewPlantFilter}
+              onChange={e => setReviewPlantFilter(e.target.value)}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
+            >
+              {reviewPlants.map(p => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="bh-metric-label mb-1 block">Review reason</label>
+            <select
+              value={reviewReasonFilter}
+              onChange={e => setReviewReasonFilter(e.target.value)}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
+            >
+              {REVIEW_REASON_CATEGORIES.map(c => (
+                <option key={c.key} value={c.key}>{c.label}</option>
+              ))}
+            </select>
+          </div>
+          {(reviewPlantFilter !== 'All' || reviewReasonFilter !== 'all') && (
+            <div className="flex items-end gap-2 pb-0.5">
+              <span className="text-xs text-muted-foreground">
+                Showing {reviewCandidates.length} of {allReviewCandidates.length}
+              </span>
+              <button
+                onClick={() => { setReviewPlantFilter('All'); setReviewReasonFilter('all') }}
+                className="text-xs text-btn-primary hover:underline"
+              >
+                Clear filters
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="rounded-lg px-4 py-3 mb-3 text-xs bg-warning/5 border border-warning/30 text-warning">
+          Tagging accuracy requires operational review. Events are flagged based on patterns, duration, and tag usage. This does not prove tagging errors — supervisor review is required.
+        </div>
+
+        <div className="rounded-lg px-4 py-2 mb-4 text-xs bg-card border border-border text-muted-foreground">
+          <span className="font-semibold text-foreground">Double-tagged events:</span>
+          {' '}Events with the same tag repeated multiple times are shown for review because they may double-count downtime in tag-level analysis.
         </div>
 
         {reviewCandidates.length === 0 ? (
-          <p className="text-sm text-muted-foreground">No review candidates found.</p>
+          <p className="text-sm text-muted-foreground">
+            {allReviewCandidates.length === 0
+              ? 'No review candidates found.'
+              : 'No candidates match the current filters.'}
+          </p>
         ) : (
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto" style={{ maxHeight: 480, overflowY: 'auto' }}>
             <table className="w-full">
-              <thead>
+              <thead className="sticky top-0 bg-card z-10">
                 <tr>
-                  {['Machine', 'Site', 'Shift', 'Duration', 'Tags', 'Reason(s) for Review'].map(h => (
+                  {['Machine', 'Site', 'Shift', 'Date', 'Duration', 'Tags', 'Reason(s) for Review'].map(h => (
                     <th key={h} className={tableHeaderCls}>{h}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {reviewCandidates.slice(0, 50).map((e, i) => (
-                  <tr key={i}>
+                {reviewCandidates.slice(0, 200).map((e, i) => (
+                  <tr key={i} className={e.reasons.some(r => r.toLowerCase().startsWith('double-tagged')) ? 'bg-danger/5' : ''}>
                     <td className={tableCellCls}><span className="font-mono text-xs">{e.device}</span></td>
                     <td className={tableCellCls}>{e.plant}</td>
                     <td className={tableCellCls}>{e.shift}</td>
+                    <td className={tableCellCls}>{e.calendar_date}</td>
                     <td className={tableCellCls}>{fmtDuration(e.duration)}</td>
                     <td
                       className={tableCellCls}
                       style={{ maxWidth: 160, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                      title={e.tags}
                     >
                       {e.tags || <span className="text-muted-foreground">—</span>}
                     </td>
                     <td className={tableCellCls}>
                       {e.reasons.map((r, ri) => (
-                        <div key={ri} className="text-xs text-warning">{r}</div>
+                        <div key={ri} className={`text-xs ${r.toLowerCase().startsWith('double-tagged') ? 'text-danger' : 'text-warning'}`}>{r}</div>
                       ))}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {reviewCandidates.length > 50 && (
+            {reviewCandidates.length > 200 && (
               <p className="text-xs mt-2 px-2 text-muted-foreground">
-                Showing 50 of {reviewCandidates.length} candidates.
+                Showing 200 of {reviewCandidates.length} candidates. Use filters to narrow results.
               </p>
             )}
           </div>

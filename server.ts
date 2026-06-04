@@ -5,11 +5,23 @@ import { createHash, timingSafeEqual, randomBytes } from 'node:crypto'
 import { readFileSync, existsSync, mkdirSync } from 'node:fs'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { createRequire } from 'node:module'
 import rateLimit from 'express-rate-limit'
 import compression from 'compression'
 import { parseCSV, parseEnergyCSV, parseDowntimeCSV, parseOEECSV } from './src/data/parser'
 import type { OEEDiagnostics } from './src/data/parser'
-import type { ColorChangeEvent, EnergyRow } from './src/data/types'
+import type { ColorChangeEvent, EnergyRow, RuntimeRecord } from './src/data/types'
+
+// CJS-interop require — used for the xlsx package (CommonJS module)
+const _require = createRequire(import.meta.url)
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let XLSX: any = null
+try {
+  XLSX = _require('xlsx')
+  console.log('[server] xlsx loaded, version:', XLSX.version)
+} catch {
+  console.warn('[server] xlsx not available — Excel uploads disabled')
+}
 
 // ── Environment ────────────────────────────────────────────────────────────
 const __filename = fileURLToPath(import.meta.url)
@@ -100,6 +112,17 @@ db.exec(`
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  CREATE TABLE IF NOT EXISTS runtime_data (
+    row_hash    TEXT PRIMARY KEY,
+    device      TEXT NOT NULL,
+    date        TEXT NOT NULL,
+    plant       TEXT NOT NULL,
+    shift       TEXT NOT NULL,
+    runtime_hrs REAL NOT NULL,
+    runtime_pct REAL,
+    ingested_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `)
 
 // ── Schema Migrations ──────────────────────────────────────────────────────
@@ -157,6 +180,12 @@ const stmts = {
     INSERT OR REPLACE INTO settings (key, value, updated_at)
     VALUES (@key, @value, datetime('now'))
   `),
+  insertRuntime: db.prepare(`
+    INSERT OR IGNORE INTO runtime_data (row_hash, device, date, plant, shift, runtime_hrs, runtime_pct)
+    VALUES (@row_hash, @device, @date, @plant, @shift, @runtime_hrs, @runtime_pct)
+  `),
+  getRuntime: db.prepare('SELECT device, date, plant, shift, runtime_hrs, runtime_pct FROM runtime_data ORDER BY device, date'),
+  statsRuntime: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM runtime_data'),
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────────
@@ -176,6 +205,197 @@ function safeCompare(a: string, b: string): boolean {
   const bBuf = Buffer.from(b)
   if (aBuf.length !== bBuf.length) return false
   return timingSafeEqual(aBuf, bBuf)
+}
+
+// ── Runtime XLSX Parser ────────────────────────────────────────────────────
+// Parses Guidewheel "Trends" wide-format xlsx exports.
+// Column headers: "{Day} {Mon} {D} {YYYY} - {Shift} ({Plant}) (Runtime hrs)"
+//             OR: "{Day} {Mon} {D} {YYYY} - {Shift} - {Plant} (Runtime hrs)"
+// Row 0 = headers, Column 0 = "Device".
+
+export interface RuntimeDiagnostics {
+  fileType: string
+  sheetUsed: string
+  rowsRead: number
+  validRows: number
+  devicesFound: string[]
+  plantsFound: string[]
+  shiftsFound: string[]
+  dateMin: string
+  dateMax: string
+  skippedReasons: string[]
+}
+
+const MONTH_MAP: Record<string, string> = {
+  jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06',
+  jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
+}
+
+function parseRuntimeHeader(header: string): { date: string; shift: string; plant: string; metric: 'pct' | 'hrs' | 'min' } | null {
+  // Remove metric suffix: "(Runtime %)", "(Runtime hrs)", "(Runtime min)"
+  const metricMatch = header.match(/\(Runtime\s+(hrs|%|min)\)\s*$/i)
+  if (!metricMatch) return null
+  const metricRaw = metricMatch[1].toLowerCase()
+  const metric: 'pct' | 'hrs' | 'min' = metricRaw === 'hrs' ? 'hrs' : metricRaw === '%' ? 'pct' : 'min'
+
+  // Strip the metric suffix (find " (Runtime" and take everything before)
+  const idx = header.lastIndexOf(' (Runtime')
+  if (idx < 0) return null
+  const withoutMetric = header.slice(0, idx).trim()
+
+  // Match date prefix: "Thu Jan 1 2026 - ..."
+  const dateMatch = withoutMetric.match(
+    /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+(\d+)\s+(\d{4})\s+-\s+(.+)$/i
+  )
+  if (!dateMatch) return null
+  const [, month, day, year, shiftPlant] = dateMatch
+  const mm = MONTH_MAP[month.toLowerCase()]
+  if (!mm) return null
+  const date = `${year}-${mm}-${day.padStart(2, '0')}`
+
+  // Pattern 1: "1st Shift (Addison)" — plant in trailing parens
+  const parenPlant = shiftPlant.match(/^(.+?)\s+\((Addison|Mayflower|Sparks)\)\s*$/i)
+  if (parenPlant) {
+    return { date, shift: parenPlant[1].trim(), plant: parenPlant[2], metric }
+  }
+  // Pattern 2: "24 hrs shift - Sparks" — plant after last " - "
+  const dashPlant = shiftPlant.match(/^(.+?)\s+-\s+(Addison|Mayflower|Sparks)\s*$/i)
+  if (dashPlant) {
+    return { date, shift: dashPlant[1].trim(), plant: dashPlant[2], metric }
+  }
+  return null
+}
+
+function normalizeShift(raw: string): string {
+  const l = raw.toLowerCase()
+  if (l.includes('1st') || l.includes('first')) return '1st Shift'
+  if (l.includes('2nd') || l.includes('second')) return '2nd Shift'
+  if (l.includes('3rd') || l.includes('third')) return '3rd Shift'
+  if (l.includes('24')) return '24hr'
+  return raw
+}
+
+function parseRuntimeXLSX(buffer: Buffer): { records: RuntimeRecord[]; diagnostics: RuntimeDiagnostics } {
+  if (!XLSX) throw new Error('xlsx package not available — ensure xlsx is installed')
+
+  const wb = XLSX.read(buffer, { type: 'buffer' })
+  const sheetName = wb.SheetNames[0]
+  const ws = wb.Sheets[sheetName]
+  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+
+  // Parse column headers (row 0)
+  type ColMeta = { col: number; date: string; shift: string; plant: string; metric: 'pct' | 'hrs' | 'min' }
+  const columnMeta: (ColMeta | null)[] = []
+  for (let c = 0; c <= range.e.c; c++) {
+    if (c === 0) { columnMeta.push(null); continue }
+    const cell = ws[XLSX.utils.encode_cell({ r: 0, c })]
+    if (!cell?.v) { columnMeta.push(null); continue }
+    const parsed = parseRuntimeHeader(String(cell.v))
+    columnMeta.push(parsed ? { col: c, ...parsed } : null)
+  }
+
+  // Only hrs columns are stored (most useful for energy normalisation)
+  const hrsCols = columnMeta.filter((m): m is ColMeta => m !== null && m.metric === 'hrs')
+  // Build a pct lookup: date|shift|plant → colIndex
+  const pctLookup = new Map<string, number>()
+  for (const m of columnMeta) {
+    if (m && m.metric === 'pct') pctLookup.set(`${m.date}|${m.shift}|${m.plant}`, m.col)
+  }
+
+  const SKIP_DEVICES = new Set(['Total', 'Sum', 'total', 'sum', ''])
+  const records: RuntimeRecord[] = []
+  const skippedReasons: string[] = []
+  let skippedDevice = 0
+
+  const PLANT_MAP: Record<string, string> = { '1': 'Addison', '2': 'Mayflower', '3': 'Sparks' }
+
+  for (let r = 1; r <= range.e.r; r++) {
+    const devCell = ws[XLSX.utils.encode_cell({ r, c: 0 })]
+    if (!devCell?.v) continue
+    const device = String(devCell.v).trim()
+    if (SKIP_DEVICES.has(device)) { skippedDevice++; continue }
+
+    const devicePlant = PLANT_MAP[device.charAt(0)] ?? null
+    if (!devicePlant) { skippedDevice++; continue }
+
+    for (const cm of hrsCols) {
+      // Only include columns that match this device's plant
+      if (cm.plant.toLowerCase() !== devicePlant.toLowerCase()) continue
+      const cell = ws[XLSX.utils.encode_cell({ r, c: cm.col })]
+      if (!cell || cell.v === '' || cell.v === undefined || cell.v === null) continue
+      const hrs = typeof cell.v === 'number' ? cell.v : parseFloat(String(cell.v))
+      if (isNaN(hrs) || hrs < 0) continue
+
+      let pct = 0
+      const pctCol = pctLookup.get(`${cm.date}|${cm.shift}|${cm.plant}`)
+      if (pctCol !== undefined) {
+        const pctCell = ws[XLSX.utils.encode_cell({ r, c: pctCol })]
+        if (pctCell && typeof pctCell.v === 'number') pct = pctCell.v
+      }
+
+      records.push({
+        device,
+        date: cm.date,
+        plant: devicePlant,
+        shift: normalizeShift(cm.shift),
+        runtimeHrs: hrs,
+        runtimePct: pct,
+      })
+    }
+  }
+
+  if (skippedDevice > 0) skippedReasons.push(`${skippedDevice} summary/unknown device rows skipped`)
+
+  const devices = Array.from(new Set(records.map(r => r.device))).sort()
+  const plants = Array.from(new Set(records.map(r => r.plant))).sort()
+  const shifts = Array.from(new Set(records.map(r => r.shift))).sort()
+  const dates = Array.from(new Set(records.map(r => r.date))).sort()
+
+  return {
+    records,
+    diagnostics: {
+      fileType: 'xlsx',
+      sheetUsed: sheetName,
+      rowsRead: range.e.r,
+      validRows: records.length,
+      devicesFound: devices,
+      plantsFound: plants,
+      shiftsFound: shifts,
+      dateMin: dates[0] ?? '',
+      dateMax: dates[dates.length - 1] ?? '',
+      skippedReasons,
+    },
+  }
+}
+
+function ingestRuntime(buffer: Buffer, fileName: string) {
+  const { records, diagnostics } = parseRuntimeXLSX(buffer)
+  let rowsAdded = 0
+  let duplicatesSkipped = 0
+
+  db.transaction(() => {
+    for (const r of records) {
+      const hash = rowHash(`${r.device}|${r.date}|${r.shift}|${r.plant}`)
+      const result = stmts.insertRuntime.run({
+        row_hash: hash,
+        device: r.device,
+        date: r.date,
+        plant: r.plant,
+        shift: r.shift,
+        runtime_hrs: r.runtimeHrs,
+        runtime_pct: r.runtimePct,
+      })
+      result.changes > 0 ? rowsAdded++ : duplicatesSkipped++
+    }
+  })()
+
+  stmts.logIngestion.run({
+    file_name: hashFileName(fileName),
+    table_name: 'runtime_data',
+    rows_added: rowsAdded,
+    duplicates_skipped: duplicatesSkipped,
+  })
+  return { rowsAdded, duplicatesSkipped, total: records.length, diagnostics }
 }
 
 // ── Energy Session Store ───────────────────────────────────────────────────
@@ -398,7 +618,7 @@ app.set('trust proxy', 1)
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB — realistic CSV ceiling
+  limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB — handles large xlsx runtime files
 })
 app.use(compression())
 app.use(express.json())
@@ -521,11 +741,13 @@ app.get('/api/admin/diagnostics', (_req, res) => {
   const maxStat = stmts.statsEnergyMax.get() as { n: number; last: string | null }
   const downtimeStat = stmts.statsDowntime.get() as { n: number; last: string | null }
   const oeeStat = stmts.statsOEE.get() as { n: number; last: string | null }
+  const runtimeStat = stmts.statsRuntime.get() as { n: number; last: string | null }
 
   const issueDates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM issues').get() as { min: string | null; max: string | null }
   const avgDates = db.prepare('SELECT MIN(date) as min, MAX(date) as max FROM energy_average').get() as { min: string | null; max: string | null }
   const downtimeDates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM downtime_events').get() as { min: string | null; max: string | null }
   const oeeDates = db.prepare('SELECT MIN(date) as min, MAX(date) as max FROM oee_data').get() as { min: string | null; max: string | null }
+  const runtimeDates = db.prepare('SELECT MIN(date) as min, MAX(date) as max FROM runtime_data').get() as { min: string | null; max: string | null }
 
   res.json({
     dbPath: process.env.NODE_ENV !== 'production' ? DB_PATH : '(hidden in production)',
@@ -536,6 +758,7 @@ app.get('/api/admin/diagnostics', (_req, res) => {
       energy_max: { count: maxStat.n, lastIngested: maxStat.last },
       downtime_events: { count: downtimeStat.n, lastIngested: downtimeStat.last, dateMin: downtimeDates.min, dateMax: downtimeDates.max },
       oee_data: { count: oeeStat.n, lastIngested: oeeStat.last, dateMin: oeeDates.min, dateMax: oeeDates.max },
+      runtime_data: { count: runtimeStat.n, lastIngested: runtimeStat.last, dateMin: runtimeDates.min, dateMax: runtimeDates.max },
     },
   })
 })
@@ -659,6 +882,21 @@ app.get('/api/data/oee', (_req, res) => {
   res.json({ records, total: records.length, lastUpdated: stat.last })
 })
 
+// ── API: Get Runtime Data ────────────────────────────────────────────────────
+app.get('/api/data/runtime', (_req, res) => {
+  const rows = stmts.getRuntime.all() as any[]
+  const records: RuntimeRecord[] = rows.map(r => ({
+    device: r.device,
+    date: r.date,
+    plant: r.plant,
+    shift: r.shift,
+    runtimeHrs: r.runtime_hrs,
+    runtimePct: r.runtime_pct ?? 0,
+  }))
+  const stat = stmts.statsRuntime.get() as { n: number; last: string | null }
+  res.json({ records, total: records.length, lastUpdated: stat.last })
+})
+
 // ── API: Upload ─────────────────────────────────────────────────────────────
 app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res: Response) => {
   if (!req.file) {
@@ -666,17 +904,62 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
     return
   }
 
-  const csvText = req.file.buffer.toString('utf-8')
   const fileName = req.file.originalname
+  const lowerName = fileName.toLowerCase()
   const typeHint = (req.body?.type as string | undefined) || ''
 
+  // Detect Excel files by magic bytes (ZIP PK signature) or extension
+  const isExcel = (
+    (req.file.buffer[0] === 0x50 && req.file.buffer[1] === 0x4B &&
+     req.file.buffer[2] === 0x03 && req.file.buffer[3] === 0x04) ||
+    lowerName.endsWith('.xlsx') || lowerName.endsWith('.xls')
+  )
+
+  // ── Excel branch ──
+  if (isExcel) {
+    if (!XLSX) {
+      res.status(500).json({ error: 'Excel upload is not available (xlsx package not installed on server). Please convert to CSV.' })
+      return
+    }
+    try {
+      // Determine Excel type — "runtime" (Guidewheel Trends) or "energy" (rare)
+      // Peek at cell A1 to detect content type
+      const wb = XLSX.read(req.file.buffer, { type: 'buffer', sheetRows: 2 })
+      const ws = wb.Sheets[wb.SheetNames[0]]
+      const a1 = ws['A1']?.v ? String(ws['A1'].v).toLowerCase() : ''
+      const b1 = ws['B1']?.v ? String(ws['B1'].v).toLowerCase() : ''
+
+      let excelType: string
+      if (a1 === 'device' && (b1.includes('runtime') || b1.includes('shift'))) {
+        excelType = 'runtime'
+      } else if (a1.includes('machine') || a1.includes('energy')) {
+        excelType = 'energy_average'
+      } else {
+        excelType = typeHint || 'runtime' // default xlsx to runtime
+      }
+
+      if (excelType === 'runtime') {
+        const { diagnostics: runtimeDiagnostics, ...rest } = ingestRuntime(req.file.buffer, fileName)
+        res.json({ ...rest, runtimeDiagnostics, type: 'runtime', fileName, fileType: 'xlsx', sheetUsed: wb.SheetNames[0] })
+        return
+      }
+      // Future: handle energy xlsx if needed
+      res.status(400).json({ error: 'Excel file detected but content type not recognized. Expected a Guidewheel Trends runtime export.' })
+    } catch (err: unknown) {
+      console.error('[upload] Excel ingestion error:', err)
+      res.status(500).json({ error: 'Excel upload failed. Check that the file is a valid Guidewheel Trends export.' })
+    }
+    return
+  }
+
+  // ── CSV branch ──
+  const csvText = req.file.buffer.toString('utf-8')
+
   // Content-first type detection to prevent filename-based misrouting.
-  // Energy CSVs use semicolons as delimiters — check data lines before filename.
   const csvLines = csvText.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim())
   const firstHeaderLine = (csvLines[0] || '').toLowerCase()
   const firstDataLine = csvLines.length > 1 ? csvLines[1] : ''
   const isSemicolonDelimited = (firstDataLine.match(/;/g) || []).length >= 2
-  const lowerName = fileName.toLowerCase()
 
   let type: 'issues' | 'energy_average' | 'energy_max' | 'oee'
 
@@ -687,7 +970,6 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
   } else if (typeHint === 'energy_average' || typeHint === 'energy') {
     type = 'energy_average'
   } else if (isSemicolonDelimited || firstHeaderLine.includes('energy kwh')) {
-    // Semicolon-delimited = energy format; max vs average via filename
     type = lowerName.includes('max') ? 'energy_max' : 'energy_average'
   } else if (
     firstHeaderLine.includes('oee') ||
@@ -714,8 +996,6 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
       result = ingestEnergy(csvText, fileName, type)
     }
 
-    // When all uploaded records are duplicates, include the existing data range
-    // so the client can show "data current through X" instead of a blank success.
     if (result.rowsAdded === 0 && (result.duplicatesSkipped as number) > 0) {
       if (type === 'energy_average' || type === 'energy_max') {
         const tbl = type === 'energy_average' ? 'energy_average' : 'energy_max'
@@ -727,9 +1007,8 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
       }
     }
 
-    res.json({ ...result, type, fileName })
+    res.json({ ...result, type, fileName, fileType: 'csv' })
   } catch (err: unknown) {
-    // Log full error server-side; return generic message to client.
     console.error('[upload] ingestion error:', err)
     res.status(500).json({ error: 'Upload failed. Please check the file format and try again.' })
   }

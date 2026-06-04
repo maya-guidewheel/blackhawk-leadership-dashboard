@@ -131,3 +131,12 @@ export interface OEERecord {
   quality: number | null
   session_key?: string   // stable dedup key for multi-session-per-day data (production CSV)
 }
+
+export interface RuntimeRecord {
+  device: string
+  date: string       // YYYY-MM-DD
+  plant: string      // Addison | Mayflower | Sparks
+  shift: string      // 1st Shift | 2nd Shift | 3rd Shift | 24hr
+  runtimeHrs: number
+  runtimePct: number
+}

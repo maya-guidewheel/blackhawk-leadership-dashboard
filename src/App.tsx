@@ -22,7 +22,7 @@ import {
   weeklyPlantSummaries,
   weeklyDeviceMatrix,
 } from './data/aggregations'
-import type { ColorChangeEvent, FilterState, EnergyRow, DowntimeEvent, OEERecord } from './data/types'
+import type { ColorChangeEvent, FilterState, EnergyRow, DowntimeEvent, OEERecord, RuntimeRecord } from './data/types'
 import { getCalendarDate } from './utils/dates'
 
 type Tab = 'changeover' | 'tagging' | 'oee' | 'energy' | 'energy-uptime'
@@ -49,7 +49,19 @@ interface UploadFeedback {
   duplicatesSkipped: number
   dataMin?: string
   dataMax?: string
+  fileType?: string
+  sheetUsed?: string
   diagnostics?: OEEDiagnostics
+  runtimeDiagnostics?: {
+    rowsRead: number
+    validRows: number
+    devicesFound: string[]
+    plantsFound: string[]
+    shiftsFound: string[]
+    dateMin: string
+    dateMax: string
+    skippedReasons: string[]
+  }
 }
 
 function getDefaultFilters(): FilterState {
@@ -90,6 +102,7 @@ export default function App() {
   const [energyUsageRows, setEnergyUsageRows] = useState<EnergyRow[]>([])
   const [downtimeEvents, setDowntimeEvents] = useState<DowntimeEvent[]>([])
   const [oeeRecords, setOEERecords] = useState<OEERecord[]>([])
+  const [runtimeRecords, setRuntimeRecords] = useState<RuntimeRecord[]>([])
   const [complianceTarget, setComplianceTarget] = useState(99.5)
   const [filters, setFilters] = useState<FilterState>(getDefaultFilters())
   const [loading, setLoading] = useState(true)
@@ -105,13 +118,14 @@ export default function App() {
     setLoading(true)
     setError('')
     try {
-      const [issuesRes, energyRes, energyUsageRes, statusRes, downtimeRes, oeeRes] = await Promise.all([
+      const [issuesRes, energyRes, energyUsageRes, statusRes, downtimeRes, oeeRes, runtimeRes] = await Promise.all([
         apiFetch('/api/data/issues'),
         apiFetch('/api/data/energy/average'), // 401 here is expected if not energy-authed
         apiFetch('/api/data/energy/usage'),   // non-gated; used by Energy vs Uptime tab
         apiFetch('/api/status'),
         apiFetch('/api/data/downtime'),
         apiFetch('/api/data/oee'),
+        apiFetch('/api/data/runtime'),
       ])
 
       // 401 on issues or status means main auth is stale.
@@ -173,6 +187,12 @@ export default function App() {
         const oeeData = await oeeRes.json()
         setOEERecords(oeeData.records as OEERecord[])
       }
+
+      // Load runtime records
+      if (runtimeRes.ok) {
+        const runtimeData = await runtimeRes.json()
+        setRuntimeRecords(runtimeData.records as RuntimeRecord[])
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not reach the server.')
     } finally {
@@ -202,6 +222,7 @@ export default function App() {
       setEnergyUsageRows([])
       setDowntimeEvents([])
       setOEERecords([])
+      setRuntimeRecords([])
       setDataStatus(null)
       setError('')
       setLoading(true)
@@ -262,6 +283,13 @@ export default function App() {
     setEnergyUsageRows(data.rows as EnergyRow[])
   }, [])
 
+  const refreshRuntime = useCallback(async () => {
+    const res = await apiFetch('/api/data/runtime')
+    if (!res.ok) return
+    const data = await res.json()
+    setRuntimeRecords(data.records as RuntimeRecord[])
+  }, [])
+
   const refreshStatus = useCallback(async () => {
     const res = await apiFetch('/api/status')
     setDataStatus(await res.json())
@@ -286,6 +314,7 @@ export default function App() {
       else if (result.type === 'energy_average') {
         await Promise.all([refreshEnergy(), refreshEnergyUsage()])
       } else if (result.type === 'oee') await refreshOEE()
+      else if (result.type === 'runtime') await refreshRuntime()
       await refreshStatus()
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Upload failed')
@@ -293,7 +322,7 @@ export default function App() {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [refreshIssues, refreshEnergy, refreshEnergyUsage, refreshStatus])
+  }, [refreshIssues, refreshEnergy, refreshEnergyUsage, refreshRuntime, refreshStatus])
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const filtered = useMemo(() => allEvents.filter(e => {
@@ -311,6 +340,16 @@ export default function App() {
   const heatmapData = useMemo(() => weeklyDeviceMatrix(filtered), [filtered])
 
   const hasAnyData = allEvents.length > 0 || avgEnergyRows.length > 0 || energyUsageRows.length > 0
+
+  // Best available energy rows for Energy vs Uptime (use executive data if loaded, else non-gated)
+  const bestEnergyRows = avgEnergyRows.length > 0 ? avgEnergyRows : energyUsageRows
+
+  // Re-fetch energyUsageRows when switching to the energy-uptime tab and data is missing
+  useEffect(() => {
+    if (activeTab === 'energy-uptime' && energyUsageRows.length === 0 && avgEnergyRows.length === 0) {
+      refreshEnergyUsage()
+    }
+  }, [activeTab, energyUsageRows.length, avgEnergyRows.length, refreshEnergyUsage])
 
   // Last-updated text shown in header (context-aware)
   const lastUpdatedText = (() => {
@@ -352,12 +391,12 @@ export default function App() {
                       {lastUpdatedText}
                     </span>
                   )}
-                  <label className="inline-flex items-center gap-2 cursor-pointer rounded-md bg-btn-primary text-btn-primary-foreground hover:bg-btn-primary-accent px-3.5 py-1.5 text-sm font-medium transition-colors">
-                    {uploading ? 'Uploading…' : 'Upload CSV'}
+                  <label className="inline-flex items-center gap-2 cursor-pointer rounded-md bg-btn-primary text-btn-primary-foreground hover:bg-btn-primary-accent px-3.5 py-1.5 text-sm font-medium transition-colors" title="Supported files: CSV, XLSX">
+                    {uploading ? 'Uploading…' : 'Upload CSV / XLSX'}
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept=".csv"
+                      accept=".csv,.xlsx,.xls"
                       onChange={handleFileUpload}
                       disabled={uploading}
                       className="hidden"
@@ -435,6 +474,27 @@ export default function App() {
               {uploadFeedback.rowsAdded === 0 && uploadFeedback.duplicatesSkipped > 0 && uploadFeedback.dataMin && (
                 <div className="mt-1 text-xs text-muted-foreground">
                   Existing dataset: <span className="font-medium text-foreground">{uploadFeedback.dataMin}</span> to <span className="font-medium text-foreground">{uploadFeedback.dataMax}</span>. Data is current — no new records to add.
+                </div>
+              )}
+              {uploadFeedback.type === 'runtime' && uploadFeedback.runtimeDiagnostics && (
+                <div className="mt-2 text-xs space-y-1 text-muted-foreground">
+                  <div><span className="font-semibold text-foreground">File type:</span> {uploadFeedback.fileType?.toUpperCase() ?? 'XLSX'} · <span className="font-semibold text-foreground">Sheet:</span> {uploadFeedback.sheetUsed ?? 'entry'}</div>
+                  <div><span className="font-semibold text-foreground">Rows read:</span> {uploadFeedback.runtimeDiagnostics.rowsRead} · <span className="font-semibold text-foreground">Valid records:</span> {uploadFeedback.runtimeDiagnostics.validRows}</div>
+                  {uploadFeedback.runtimeDiagnostics.dateMin && (
+                    <div><span className="font-semibold text-foreground">Date range:</span> {uploadFeedback.runtimeDiagnostics.dateMin} to {uploadFeedback.runtimeDiagnostics.dateMax}</div>
+                  )}
+                  {uploadFeedback.runtimeDiagnostics.plantsFound.length > 0 && (
+                    <div><span className="font-semibold text-foreground">Plants:</span> {uploadFeedback.runtimeDiagnostics.plantsFound.join(', ')}</div>
+                  )}
+                  {uploadFeedback.runtimeDiagnostics.devicesFound.length > 0 && (
+                    <div><span className="font-semibold text-foreground">Devices:</span> {uploadFeedback.runtimeDiagnostics.devicesFound.length} found</div>
+                  )}
+                  {uploadFeedback.runtimeDiagnostics.shiftsFound.length > 0 && (
+                    <div><span className="font-semibold text-foreground">Shifts:</span> {uploadFeedback.runtimeDiagnostics.shiftsFound.join(', ')}</div>
+                  )}
+                  {uploadFeedback.runtimeDiagnostics.skippedReasons.length > 0 && (
+                    <div><span className="font-semibold text-foreground">Skipped:</span> {uploadFeedback.runtimeDiagnostics.skippedReasons.join(' · ')}</div>
+                  )}
                 </div>
               )}
               {uploadFeedback.rowsAdded === 0 && uploadFeedback.type === 'oee' && uploadFeedback.diagnostics && (
@@ -532,7 +592,11 @@ export default function App() {
 
               {/* ── Energy vs Uptime Tab (no energy gate) ────────────────── */}
               {activeTab === 'energy-uptime' && (
-                <EnergyUptimeDashboard energyRows={energyUsageRows} downtimeEvents={downtimeEvents} />
+                <EnergyUptimeDashboard
+                  energyRows={bestEnergyRows}
+                  downtimeEvents={downtimeEvents}
+                  runtimeRecords={runtimeRecords}
+                />
               )}
 
               {/* ── Energy Tab (executive-gated) ──────────────────────────── */}
