@@ -7,6 +7,7 @@ import {
   taggingCompliance,
   plannedDowntimeAnalysis,
   taggingReviewCandidates,
+  computeReviewHighlights,
   REVIEW_REASON_CATEGORIES,
   matchesReasonCategory,
 } from '../data/taggingAggregations'
@@ -123,6 +124,11 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
     const plants = Array.from(new Set(allReviewCandidates.map(e => e.plant))).sort()
     return ['All', ...plants]
   }, [allReviewCandidates])
+
+  const reviewHighlights = useMemo(
+    () => computeReviewHighlights(allReviewCandidates),
+    [allReviewCandidates]
+  )
 
   const complianceColorCls = compliance.compliancePct >= complianceTarget
     ? 'text-success'
@@ -242,6 +248,17 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
           </div>
         )}
       </div>
+
+      {/* ── Date range context ───────────────────────────────────────────── */}
+      {(effectiveDateFrom || effectiveDateTo) && (
+        <div className="text-xs text-muted-foreground px-1">
+          Showing <span className="font-medium text-foreground">{effectiveDateFrom}</span> to <span className="font-medium text-foreground">{effectiveDateTo}</span>
+          {' '}·{' '}{filteredEvents.length.toLocaleString()} events
+          {dateExtent.min && (
+            <span className="ml-2 text-muted-foreground">(available data: {dateExtent.min} to {dateExtent.max})</span>
+          )}
+        </div>
+      )}
 
       {/* ── Summary KPI Cards ─────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -513,6 +530,24 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
             </div>
           )}
         </div>
+
+        {/* Review Highlights */}
+        {reviewHighlights.length > 0 && (
+          <div className="rounded-lg px-4 py-3 mb-3 bg-card border border-border">
+            <div className="text-xs font-semibold text-foreground mb-2">
+              Tagging Pattern Summary
+              <span className="ml-2 font-normal text-muted-foreground">({effectiveDateFrom} to {effectiveDateTo})</span>
+            </div>
+            <ul className="space-y-1">
+              {reviewHighlights.map((h, i) => (
+                <li key={i} className="text-xs text-muted-foreground flex items-start gap-2">
+                  <span className="text-btn-primary mt-0.5">›</span>
+                  <span>{h.text}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
 
         <div className="rounded-lg px-4 py-3 mb-3 text-xs bg-warning/5 border border-warning/30 text-warning">
           Tagging accuracy requires operational review. Events are flagged based on patterns, duration, and tag usage. This does not prove tagging errors — supervisor review is required.

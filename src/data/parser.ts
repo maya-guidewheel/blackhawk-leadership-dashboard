@@ -188,11 +188,14 @@ const MONTH_MAP: Record<string, number> = {
 }
 
 // Parse a Guidewheel scheduled-time string like "22 May 00:00-08:00" or
-// "21 May 16:00 22 May 00:00" into a YYYY-MM-DD date string.
+// "21 May 16:00 22 May 00:00" or "2026/05/22 00:00" into a YYYY-MM-DD date string.
 function parseScheduledDate(raw: string, year = new Date().getFullYear()): string | null {
   if (!raw) return null
-  // Already ISO
+  // Already ISO dash format: "2026-05-22" or "2026-05-22T..."
   if (/^\d{4}-\d{2}-\d{2}/.test(raw)) return raw.slice(0, 10)
+  // Slash-separated ISO: "2026/05/22" or "2026/05/22 00:00"
+  const slashISO = raw.match(/^(\d{4})\/(\d{2})\/(\d{2})/)
+  if (slashISO) return `${slashISO[1]}-${slashISO[2]}-${slashISO[3]}`
   // "DD Mon ..." → take first day-month occurrence
   const m = raw.match(/\b(\d{1,2})\s+([A-Za-z]{3,})\b/)
   if (m) {
@@ -233,6 +236,13 @@ function makeGetCol(row: Record<string, string>) {
 // Detect whether a CSV is a Guidewheel Production export based on its headers
 function isProductionFormat(headerRow: Record<string, string>): boolean {
   const headers = Object.keys(headerRow).map(k => k.toLowerCase().trim())
+  // Classic Guidewheel production format (semicolon-delimited): Machine + From/To + OEE
+  if (
+    headers.some(h => h === 'machine' || h === 'device') &&
+    headers.some(h => h === 'from') &&
+    headers.some(h => h.includes('oee'))
+  ) return true
+  // Older scheduled-time format
   return (
     headers.some(h => h.includes('scheduled') || h.includes('device')) &&
     headers.some(h => h.includes('production qty') || h.includes('oee'))
@@ -277,7 +287,7 @@ function parseProductionRows(rows: Record<string, string>[], sampleIssues: strin
       if (sampleIssues.length < 3) sampleIssues.push(`Row ${i + 2}: missing device/machine value`)
       continue
     }
-    const scheduledTime = getCol('scheduled time', 'scheduled', 'time range')
+    const scheduledTime = getCol('scheduled time', 'scheduled', 'time range', 'from')
     const date = parseScheduledDate(scheduledTime || '', year)
     if (!date) {
       if (sampleIssues.length < 3)
@@ -295,17 +305,20 @@ function parseProductionRows(rows: Record<string, string>[], sampleIssues: strin
         sampleIssues.push(`Row ${i + 2}: invalid OEE value "${oeeStr}"`)
       continue
     }
-    const product = getCol('product')
+    const product = getCol('product', 'sku')
     const batch = getCol('batch')
     const prodQty = getCol('production qty', 'production quantity', 'qty')
+    const availStr = getCol('availability')
+    const perfStr = getCol('performance')
+    const qualStr = getCol('quality')
     const session_key = `${device}|${scheduledTime}|${product}|${batch}|${prodQty}|${oeeStr}`
     records.push({
       machine: device,
       date,
       oee,
-      availability: null,
-      performance: null,
-      quality: null,
+      availability: parseOEEValue(availStr),
+      performance: parseOEEValue(perfStr),
+      quality: parseOEEValue(qualStr),
       session_key,
     })
   }
@@ -313,10 +326,14 @@ function parseProductionRows(rows: Record<string, string>[], sampleIssues: strin
 }
 
 export function parseOEECSV(csvText: string): { records: OEERecord[]; diagnostics: OEEDiagnostics } {
+  // Auto-detect delimiter: semicolon-delimited files (Guidewheel production export) vs CSV
+  const firstLine = csvText.replace(/^﻿/, '').split(/\r?\n/)[0] || ''
+  const delimiter = (firstLine.match(/;/g) || []).length >= 3 ? ';' : ','
   const result = Papa.parse<Record<string, string>>(csvText, {
     header: true,
     skipEmptyLines: true,
     dynamicTyping: false,
+    delimiter,
   })
   const headersFound = (result.meta.fields || []).map(h => h.trim())
   const rowsRead = result.data.length

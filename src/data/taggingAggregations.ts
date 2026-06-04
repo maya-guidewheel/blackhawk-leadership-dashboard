@@ -381,3 +381,80 @@ export function matchesReasonCategory(reasons: string[], category: string): bool
   if (category === 'multiple-tags') return lower.some(r => r.startsWith('multiple tags'))
   return true
 }
+
+export interface ReviewHighlight {
+  text: string
+  pct?: number
+}
+
+export function computeReviewHighlights(candidates: ReviewEvent[]): ReviewHighlight[] {
+  if (candidates.length < 3) return []
+  const highlights: ReviewHighlight[] = []
+  const n = candidates.length
+
+  // Top shift
+  const shiftCounts = new Map<string, number>()
+  for (const e of candidates) shiftCounts.set(e.shift, (shiftCounts.get(e.shift) ?? 0) + 1)
+  const topShift = Array.from(shiftCounts.entries()).sort((a, b) => b[1] - a[1])[0]
+  if (topShift && topShift[1] / n >= 0.25) {
+    highlights.push({ text: `${topShift[0]} accounts for ${Math.round(topShift[1] / n * 100)}% of review candidates.`, pct: topShift[1] / n * 100 })
+  }
+
+  // Top plant
+  const plantCounts = new Map<string, number>()
+  for (const e of candidates) plantCounts.set(e.plant, (plantCounts.get(e.plant) ?? 0) + 1)
+  const topPlant = Array.from(plantCounts.entries()).sort((a, b) => b[1] - a[1])[0]
+  if (topPlant) {
+    highlights.push({ text: `${topPlant[0]} has the most review candidates (${topPlant[1]}, ${Math.round(topPlant[1] / n * 100)}% of total).`, pct: topPlant[1] / n * 100 })
+  }
+
+  // Top machine
+  const machineCounts = new Map<string, number>()
+  for (const e of candidates) machineCounts.set(e.device, (machineCounts.get(e.device) ?? 0) + 1)
+  const topMachine = Array.from(machineCounts.entries()).sort((a, b) => b[1] - a[1])[0]
+  if (topMachine && topMachine[1] >= 3) {
+    highlights.push({ text: `${topMachine[0]} has the highest review volume (${topMachine[1]} events, ${Math.round(topMachine[1] / n * 100)}% of candidates).` })
+  }
+
+  // Top reason category
+  const reasonCats = new Map<string, number>()
+  for (const e of candidates) {
+    for (const r of e.reasons) {
+      const lower = r.toLowerCase()
+      const cat =
+        lower.startsWith('double-tagged') ? 'Double-tagged issue' :
+        lower.startsWith('long untagged') ? 'Long untagged event' :
+        lower.startsWith('planned downtime on off-shift') ? 'Planned on off-shift' :
+        lower.startsWith('unusually long planned') ? 'Unusually long planned' :
+        lower.startsWith('multiple tags') ? 'Multiple tags' : 'Other'
+      reasonCats.set(cat, (reasonCats.get(cat) ?? 0) + 1)
+    }
+  }
+  const topReason = Array.from(reasonCats.entries()).sort((a, b) => b[1] - a[1])[0]
+  if (topReason) {
+    highlights.push({ text: `"${topReason[0]}" is the most common review reason (${topReason[1]} flags across ${n} candidates).` })
+  }
+
+  // Double-tagging concentration
+  const doubleTagged = candidates.filter(e => e.reasons.some(r => r.toLowerCase().startsWith('double-tagged')))
+  if (doubleTagged.length > 0) {
+    const dPlants = new Map<string, number>()
+    for (const e of doubleTagged) dPlants.set(e.plant, (dPlants.get(e.plant) ?? 0) + 1)
+    const topDP = Array.from(dPlants.entries()).sort((a, b) => b[1] - a[1])[0]
+    highlights.push({ text: `${doubleTagged.length} double-tagged event${doubleTagged.length > 1 ? 's' : ''} found across ${dPlants.size} plant${dPlants.size > 1 ? 's' : ''}. Most concentrated at ${topDP[0]} (${topDP[1]}).` })
+  }
+
+  // Day-of-week pattern
+  const dowCounts = new Map<string, number>()
+  for (const e of candidates) {
+    if (!e.calendar_date) continue
+    const dow = new Date(e.calendar_date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long' })
+    dowCounts.set(dow, (dowCounts.get(dow) ?? 0) + 1)
+  }
+  const topDow = Array.from(dowCounts.entries()).sort((a, b) => b[1] - a[1])[0]
+  if (topDow && topDow[1] / n >= 0.20) {
+    highlights.push({ text: `${topDow[0]} has the highest review-candidate rate (${topDow[1]} events, ${Math.round(topDow[1] / n * 100)}% of candidates).` })
+  }
+
+  return highlights.slice(0, 6)
+}

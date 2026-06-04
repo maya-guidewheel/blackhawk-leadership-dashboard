@@ -897,6 +897,25 @@ app.get('/api/data/runtime', (_req, res) => {
   res.json({ records, total: records.length, lastUpdated: stat.last })
 })
 
+// ── API: Ingestion Log ───────────────────────────────────────────────────────
+// Returns ingestion history for the Data Management tab. Hashed filenames are
+// shown as-is (they are sha256 prefixes, not original names — clients that sent
+// the upload get the original name back in the upload response).
+app.get('/api/data/ingestion-log', (_req, res) => {
+  const rows = db.prepare(
+    'SELECT id, file_name, table_name, rows_added, duplicates_skipped, ingested_at FROM ingestion_log ORDER BY ingested_at DESC LIMIT 200'
+  ).all() as { id: number; file_name: string; table_name: string; rows_added: number; duplicates_skipped: number; ingested_at: string }[]
+  // Also return dataset date ranges for the inventory section
+  const ranges = {
+    issues: db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max, COUNT(*) as n FROM issues').get() as { min: string | null; max: string | null; n: number },
+    energy_average: db.prepare('SELECT MIN(date) as min, MAX(date) as max, COUNT(*) as n FROM energy_average').get() as { min: string | null; max: string | null; n: number },
+    downtime_events: db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max, COUNT(*) as n FROM downtime_events').get() as { min: string | null; max: string | null; n: number },
+    oee_data: db.prepare('SELECT MIN(date) as min, MAX(date) as max, COUNT(*) as n FROM oee_data').get() as { min: string | null; max: string | null; n: number },
+    runtime_data: db.prepare('SELECT MIN(date) as min, MAX(date) as max, COUNT(*) as n FROM runtime_data').get() as { min: string | null; max: string | null; n: number },
+  }
+  res.json({ log: rows, ranges })
+})
+
 // ── API: Upload ─────────────────────────────────────────────────────────────
 app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res: Response) => {
   if (!req.file) {
@@ -963,7 +982,16 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
 
   let type: 'issues' | 'energy_average' | 'energy_max' | 'oee'
 
-  if (typeHint === 'oee') {
+  // Production/OEE CSVs contain specific columns not present in energy CSVs.
+  // Check for production format FIRST — before the generic semicolon check that
+  // would otherwise misroute semicolon-delimited production exports as energy data.
+  const isProductionCsv = (
+    firstHeaderLine.includes('oee') &&
+    firstHeaderLine.includes('availability') &&
+    (firstHeaderLine.includes('from') || firstHeaderLine.includes('machine'))
+  )
+
+  if (typeHint === 'oee' || isProductionCsv) {
     type = 'oee'
   } else if (typeHint === 'energy_max') {
     type = 'energy_max'
@@ -971,10 +999,7 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
     type = 'energy_average'
   } else if (isSemicolonDelimited || firstHeaderLine.includes('energy kwh')) {
     type = lowerName.includes('max') ? 'energy_max' : 'energy_average'
-  } else if (
-    firstHeaderLine.includes('oee') ||
-    (firstHeaderLine.includes('device') && firstHeaderLine.includes('production'))
-  ) {
+  } else if (firstHeaderLine.includes('oee') || (firstHeaderLine.includes('device') && firstHeaderLine.includes('production'))) {
     type = 'oee'
   } else if (lowerName.includes('oee') || lowerName.includes('production')) {
     type = 'oee'

@@ -15,6 +15,8 @@ import EnergyDashboard from './components/EnergyDashboard'
 import TaggingDashboard from './components/TaggingDashboard'
 import OEETrends from './components/OEETrends'
 import EnergyUptimeDashboard from './components/EnergyUptimeDashboard'
+import { ErrorBoundary } from './components/ErrorBoundary'
+import DataManagement from './components/DataManagement'
 import {
   overallStats,
   plantSummaries,
@@ -25,7 +27,7 @@ import {
 import type { ColorChangeEvent, FilterState, EnergyRow, DowntimeEvent, OEERecord, RuntimeRecord } from './data/types'
 import { getCalendarDate } from './utils/dates'
 
-type Tab = 'changeover' | 'tagging' | 'oee' | 'energy' | 'energy-uptime'
+type Tab = 'changeover' | 'tagging' | 'oee' | 'energy' | 'energy-uptime' | 'data'
 
 interface DataStatus {
   issues: { count: number; lastUpdated: string | null }
@@ -93,6 +95,7 @@ const TABS: { id: Tab; label: string; badge?: string }[] = [
   { id: 'oee', label: 'OEE Trends' },
   { id: 'energy-uptime', label: 'Energy vs Uptime' },
   { id: 'energy', label: 'Energy & Cost', badge: 'Executive' },
+  { id: 'data', label: 'Data & Calculations' },
 ]
 
 export default function App() {
@@ -162,19 +165,20 @@ export default function App() {
       // Load energy data only if the energy session token is already valid.
       if (energyRes.ok) {
         const energyData = await energyRes.json()
-        setAvgEnergyRows(energyData.rows as EnergyRow[])
+        setAvgEnergyRows(Array.isArray(energyData?.rows) ? energyData.rows : [])
       }
 
       // Non-gated energy usage (kWh without cost data) — always load if main auth passes.
       if (energyUsageRes.ok) {
         const usageData = await energyUsageRes.json()
-        setEnergyUsageRows(usageData.rows as EnergyRow[])
+        setEnergyUsageRows(Array.isArray(usageData?.rows) ? usageData.rows : [])
       }
 
       // Load downtime events
       if (downtimeRes.ok) {
         const downtimeData = await downtimeRes.json()
-        const dEvents: DowntimeEvent[] = (downtimeData.events as any[]).map(e => ({
+        const rawEvents = Array.isArray(downtimeData?.events) ? downtimeData.events : []
+        const dEvents: DowntimeEvent[] = rawEvents.map((e: any) => ({
           ...e,
           start_dt: new Date(e.start_dt),
           end_dt: new Date(e.end_dt),
@@ -185,13 +189,13 @@ export default function App() {
       // Load OEE records
       if (oeeRes.ok) {
         const oeeData = await oeeRes.json()
-        setOEERecords(oeeData.records as OEERecord[])
+        setOEERecords(Array.isArray(oeeData?.records) ? oeeData.records : [])
       }
 
       // Load runtime records
       if (runtimeRes.ok) {
         const runtimeData = await runtimeRes.json()
-        setRuntimeRecords(runtimeData.records as RuntimeRecord[])
+        setRuntimeRecords(Array.isArray(runtimeData?.records) ? runtimeData.records : [])
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not reach the server.')
@@ -206,10 +210,10 @@ export default function App() {
       const res = await apiFetch('/api/data/energy/average')
       if (!res.ok) return
       const data = await res.json()
-      setAvgEnergyRows(data.rows as EnergyRow[])
+      setAvgEnergyRows(Array.isArray(data?.rows) ? data.rows : [])
       const statusRes = await apiFetch('/api/status')
       if (statusRes.ok) setDataStatus(await statusRes.json())
-    } catch { /* non-fatal — energy data loads when gate reopens */ }
+    } catch { /* non-fatal */ }
   }, [])
 
   useEffect(() => { loadAll() }, [loadAll])
@@ -592,10 +596,24 @@ export default function App() {
 
               {/* ── Energy vs Uptime Tab (no energy gate) ────────────────── */}
               {activeTab === 'energy-uptime' && (
-                <EnergyUptimeDashboard
+                <ErrorBoundary fallbackLabel="Energy vs Uptime tab">
+                  <EnergyUptimeDashboard
+                    energyRows={bestEnergyRows}
+                    downtimeEvents={downtimeEvents}
+                    runtimeRecords={runtimeRecords}
+                  />
+                </ErrorBoundary>
+              )}
+
+              {/* ── Data & Calculations Tab ───────────────────────────────── */}
+              {activeTab === 'data' && (
+                <DataManagement
+                  dataStatus={dataStatus}
                   energyRows={bestEnergyRows}
-                  downtimeEvents={downtimeEvents}
                   runtimeRecords={runtimeRecords}
+                  oeeRecords={oeeRecords}
+                  downtimeEvents={downtimeEvents}
+                  allEvents={allEvents}
                 />
               )}
 
