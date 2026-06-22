@@ -1,5 +1,7 @@
+import { useState, Fragment } from 'react'
 import type { ColorChangeEvent, DeviceSummary, WeeklyPlantRow, PlantSummary } from '../data/types'
 import { formatDate, formatShortDate, formatDuration } from '../utils/dates'
+import { classifyChangeover } from '../data/changeover'
 
 interface Props {
   events: ColorChangeEvent[]
@@ -16,6 +18,8 @@ function statusDot(p90: number, threshold: number) {
 }
 
 export default function NeedsAttention({ events, deviceData, plantData, weeklyPlantData, threshold }: Props) {
+  // Track which Top-10 row is expanded for tag verification.
+  const [expandedRow, setExpandedRow] = useState<number | null>(null)
   // Plant health summary
   const plantHealth = [...plantData].sort((a, b) => a.avg - b.avg)
   const fastestPlant = plantHealth[0]
@@ -115,10 +119,14 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
         {/* Top 10 slowest */}
         <div className="bh-card overflow-hidden">
           <div className="bh-sub-header"><h3>Top 10 Slowest Changeovers</h3></div>
+          <div className="px-3 py-1.5 text-[0.7rem] text-muted-foreground border-b border-border">
+            Click any row to verify the raw tags and why it counts as a changeover.
+          </div>
           <div className="overflow-x-auto">
             <table className="bh-table">
               <thead>
                 <tr className="text-left">
+                  <th aria-label="expand" />
                   <th>Plant</th>
                   <th>Device</th>
                   <th>Start</th>
@@ -128,16 +136,57 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                 </tr>
               </thead>
               <tbody>
-                {top10.map((e, i) => (
-                  <tr key={i}>
-                    <td>{e.plant}</td>
-                    <td className="font-mono text-xs">{e.device}</td>
-                    <td className="text-xs">{formatDate(e.start_dt)}</td>
-                    <td className="text-xs">{formatDate(e.end_dt)}</td>
-                    <td className="text-right font-semibold text-danger">{formatDuration(e.duration)}</td>
-                    <td className="text-xs">{e.status}</td>
-                  </tr>
-                ))}
+                {top10.map((e, i) => {
+                  const matchTag = e.changeover_match_tag || classifyChangeover(e.tags || '').matchedTag || ''
+                  const isOpen = expandedRow === i
+                  return (
+                    <Fragment key={i}>
+                      <tr
+                        onClick={() => setExpandedRow(isOpen ? null : i)}
+                        className="cursor-pointer hover:bg-background-accent"
+                      >
+                        <td className="text-muted-foreground text-xs w-4">{isOpen ? '▾' : '▸'}</td>
+                        <td>{e.plant}</td>
+                        <td className="font-mono text-xs">{e.device}</td>
+                        <td className="text-xs">{formatDate(e.start_dt)}</td>
+                        <td className="text-xs">{formatDate(e.end_dt)}</td>
+                        <td className="text-right font-semibold text-danger">{formatDuration(e.duration)}</td>
+                        <td className="text-xs">{e.status}</td>
+                      </tr>
+                      {isOpen && (
+                        <tr className="bg-background-accent/40">
+                          <td colSpan={7} className="px-4 py-3">
+                            <div className="grid sm:grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                              {e.id && (
+                                <div><span className="text-muted-foreground">Event ID:</span> <span className="font-mono">{e.id}</span></div>
+                              )}
+                              <div><span className="text-muted-foreground">Plant:</span> {e.plant}</div>
+                              <div><span className="text-muted-foreground">Machine / Device:</span> <span className="font-mono">{e.device}</span></div>
+                              <div><span className="text-muted-foreground">Start:</span> {formatDate(e.start_dt)}</div>
+                              <div><span className="text-muted-foreground">End:</span> {formatDate(e.end_dt)}</div>
+                              <div><span className="text-muted-foreground">Duration:</span> {formatDuration(e.duration)}</div>
+                              <div><span className="text-muted-foreground">Status:</span> {e.status || '—'}</div>
+                              <div className="sm:col-span-2">
+                                <span className="text-muted-foreground">Raw tag(s) applied:</span>{' '}
+                                <span className="font-medium text-foreground">{e.tags || '—'}</span>
+                              </div>
+                              {e.comments && (
+                                <div className="sm:col-span-2">
+                                  <span className="text-muted-foreground">Notes:</span> {e.comments}
+                                </div>
+                              )}
+                              <div className="sm:col-span-2 mt-1 rounded px-2 py-1 bg-success/10 text-success font-medium">
+                                {matchTag
+                                  ? `Counted as changeover because tag = ${matchTag}`
+                                  : 'Counted as changeover (matching tag preserved on event)'}
+                              </div>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  )
+                })}
               </tbody>
             </table>
           </div>

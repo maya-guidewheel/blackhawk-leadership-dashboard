@@ -15,6 +15,7 @@ export interface RawRow {
 }
 
 export interface ColorChangeEvent {
+  id?: string            // stable row id (row_hash) for audit display
   start_dt: Date
   end_dt: Date
   duration: number
@@ -26,6 +27,9 @@ export interface ColorChangeEvent {
   week_start: string
   tags: string
   comments: string
+  // The raw tag that caused this event to be classified as a changeover, e.g.
+  // "Change Job". Used for click-to-verify auditing on the Changeover dashboard.
+  changeover_match_tag?: string
 }
 
 export interface StatsSummary {

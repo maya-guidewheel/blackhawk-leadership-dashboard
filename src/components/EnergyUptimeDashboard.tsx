@@ -5,6 +5,7 @@ import {
 } from 'recharts'
 import type { EnergyRow, DowntimeEvent, RuntimeRecord } from '../data/types'
 import { axisTick, tooltipStyle, gridStroke, chartColor } from '../utils/chartTheme'
+import { normalizeDateOnly, formatDisplayDate } from '../utils/dates'
 
 interface Props {
   energyRows: EnergyRow[]
@@ -40,9 +41,11 @@ export default function EnergyUptimeDashboard(rawProps: Props) {
   const runtimeRecords = safeArr(rawProps.runtimeRecords)
 
   // ── Energy date range ──────────────────────────────────────────────────────
+  // Dates are normalized to YYYY-MM-DD; any non-date value (e.g. a stray Excel
+  // time fraction) is dropped so the range never renders as a decimal.
   const energyDateRange = useMemo(() => {
     if (energyRows.length === 0) return { min: '', max: '' }
-    const dates = energyRows.map(r => r?.date ?? '').filter(Boolean).sort()
+    const dates = energyRows.map(r => normalizeDateOnly(r?.date)).filter((d): d is string => !!d).sort()
     if (dates.length === 0) return { min: '', max: '' }
     return { min: dates[0], max: dates[dates.length - 1] }
   }, [energyRows])
@@ -52,7 +55,7 @@ export default function EnergyUptimeDashboard(rawProps: Props) {
 
   const runtimeDateRange = useMemo(() => {
     if (!hasRuntime) return { min: '', max: '' }
-    const dates = runtimeRecords.map(r => r?.date ?? '').filter(Boolean).sort()
+    const dates = runtimeRecords.map(r => normalizeDateOnly(r?.date)).filter((d): d is string => !!d).sort()
     if (dates.length === 0) return { min: '', max: '' }
     return { min: dates[0], max: dates[dates.length - 1] }
   }, [runtimeRecords, hasRuntime])
@@ -323,7 +326,7 @@ export default function EnergyUptimeDashboard(rawProps: Props) {
           <div className="rounded-lg px-4 py-3 border bg-success/5 border-success/30">
             <div className="font-semibold text-foreground mb-1">Energy data</div>
             <div className="text-muted-foreground">
-              {energyDateRange.min} to {energyDateRange.max}
+              {formatDisplayDate(energyDateRange.min)} to {formatDisplayDate(energyDateRange.max)}
               <span className="ml-2 font-medium text-foreground">{energyRows.length.toLocaleString()} rows · {machines.length} machines</span>
             </div>
             <div className="mt-1 text-muted-foreground">
@@ -335,7 +338,7 @@ export default function EnergyUptimeDashboard(rawProps: Props) {
             {hasRuntime ? (
               <>
                 <div className="text-muted-foreground">
-                  {runtimeDateRange.min} to {runtimeDateRange.max}
+                  {formatDisplayDate(runtimeDateRange.min)} to {formatDisplayDate(runtimeDateRange.max)}
                   <span className="ml-2 font-medium text-foreground">{runtimeRecords.length.toLocaleString()} records</span>
                 </div>
                 <div className="mt-1 text-muted-foreground">Endpoint: <code className="text-xs">/api/data/runtime</code> (runtime_data table)</div>
@@ -354,7 +357,7 @@ export default function EnergyUptimeDashboard(rawProps: Props) {
         )}
         {selMin && selMax && energyDateRange.min && (selMin < energyDateRange.min || selMax > energyDateRange.max) && !noOverlap && (
           <div className="mt-3 rounded px-3 py-2 text-xs bg-warning/5 border border-warning/30 text-warning">
-            Selected range extends beyond available energy data ({energyDateRange.min} to {energyDateRange.max}).
+            Selected range extends beyond available energy data ({formatDisplayDate(energyDateRange.min)} to {formatDisplayDate(energyDateRange.max)}).
           </div>
         )}
       </div>

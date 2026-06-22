@@ -9,6 +9,26 @@ export function getPlantForMachine(machine: string): string {
   }
 }
 
+// Blackhawk device nomenclature: 1st char = plant (1/2/3), 2nd char = machine
+// type letter (M = Molding, K = Kleen Peel, L = Liners). Returns the type KEY.
+// Falls back to a scan if the 2nd char isn't a known type letter so unusual
+// names still classify consistently with the rest of the dashboard.
+export function getMachineTypeKey(machine: string): 'M' | 'K' | 'L' | 'other' {
+  const u = (machine || '').toUpperCase()
+  const second = u.charAt(1)
+  if (second === 'M' || second === 'K' || second === 'L') return second
+  if (u.includes('M')) return 'M'
+  if (u.includes('K')) return 'K'
+  if (u.includes('L')) return 'L'
+  return 'other'
+}
+
+export const MACHINE_TYPE_LABELS: Record<'M' | 'K' | 'L', string> = {
+  M: 'Molding',
+  K: 'Kleen Peel',
+  L: 'Liners',
+}
+
 const NOISE_FLOOR_KWH = 1
 
 export function computeEnergyByMachine(

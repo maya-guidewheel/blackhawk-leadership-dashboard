@@ -16,6 +16,63 @@ export function getCalendarDate(dt: Date): string {
   return format(dt, 'yyyy-MM-dd')
 }
 
+// Convert an Excel serial date number to a JS Date (UTC). Excel's epoch is
+// 1899-12-30 (accounting for the spurious 1900 leap year). Returns null if the
+// value is not a usable serial date (e.g. a time-only fraction < 1).
+export function excelSerialToDate(serial: number): Date | null {
+  if (!Number.isFinite(serial) || serial < 1) return null
+  const ms = Math.round((serial - 25569) * 86400 * 1000) // 25569 = days 1899-12-30→1970-01-01
+  const dt = new Date(ms)
+  return isValid(dt) ? dt : null
+}
+
+// Normalize any incoming date value to a strict "YYYY-MM-DD" string, or null if
+// it cannot be interpreted as a real calendar date. Handles:
+//   - ISO with optional time:  "2026-06-18", "2026-06-18T08:18", "2026-06-18 08:18"
+//   - slash format:            "2026/06/18", "2026/06/18 08:18"
+//   - Excel serial numbers:    "46191"  → a real date
+//   - time-only fractions:     "0.2633" → null (NOT a date — must never display)
+export function normalizeDateOnly(raw: string | number | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null
+  const s = String(raw).trim()
+  if (!s) return null
+
+  // Already ISO date (optionally with time) — take the date portion.
+  const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+
+  // Slash-separated date — take the date portion.
+  const slash = s.match(/^(\d{4})\/(\d{2})\/(\d{2})/)
+  if (slash) return `${slash[1]}-${slash[2]}-${slash[3]}`
+
+  // Pure number → Excel serial. Fractions < 1 are time-only and rejected.
+  if (/^\d+(\.\d+)?$/.test(s)) {
+    const dt = excelSerialToDate(parseFloat(s))
+    return dt ? format(dt, 'yyyy-MM-dd') : null
+  }
+
+  // Last resort: let the Date parser try, but only accept if it yields a real date.
+  const dt = new Date(s)
+  return isValid(dt) ? format(dt, 'yyyy-MM-dd') : null
+}
+
+// Render a "YYYY-MM-DD" string as a human-readable date like "Jun 18, 2026".
+// Returns "—" for anything that is not a real date (never shows raw decimals).
+export function formatDisplayDate(value: string | null | undefined): string {
+  const norm = normalizeDateOnly(value ?? null)
+  if (!norm) return '—'
+  const dt = new Date(norm + 'T00:00:00')
+  return isValid(dt) ? format(dt, 'MMM d, yyyy') : '—'
+}
+
+// Render a min→max range as "Jun 18, 2026 to Jun 18, 2026" (or "—" if invalid).
+export function formatDateRange(min: string | null | undefined, max: string | null | undefined): string {
+  const a = formatDisplayDate(min)
+  const b = formatDisplayDate(max)
+  if (a === '—' && b === '—') return '—'
+  return `${a} to ${b}`
+}
+
 export function getWeekStart(dt: Date): string {
   const monday = startOfWeek(dt, { weekStartsOn: 1 })
   return format(monday, 'yyyy-MM-dd')

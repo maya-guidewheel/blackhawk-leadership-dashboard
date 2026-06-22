@@ -1,6 +1,7 @@
 import Papa from 'papaparse'
 import type { RawRow, ColorChangeEvent, EnergyRow, DowntimeEvent, OEERecord } from './types'
-import { parseTimestamp, getCalendarDate, getWeekStart } from '../utils/dates'
+import { parseTimestamp, getCalendarDate, getWeekStart, normalizeDateOnly } from '../utils/dates'
+import { classifyChangeover, splitTags } from './changeover'
 
 export interface OEEDiagnostics {
   format: 'production' | 'simple' | 'unknown'
@@ -9,7 +10,20 @@ export interface OEEDiagnostics {
   sampleIssues: string[]
 }
 
-const CHANGEOVER_TAG = 'change-color/foam/label'
+// Diagnostics returned when ingesting a Guidewheel Issues file — surfaced to the
+// user so uploads never fail silently and changeover classification is auditable.
+export interface IssuesDiagnostics {
+  rowsRead: number
+  changeoverEvents: number       // rows classified as real changeovers
+  excludedNonChangeover: number  // valid downtime rows that are NOT changeovers
+  skippedInvalid: number         // rows dropped for bad/missing dates or duration
+  topExcludedTags: { tag: string; count: number }[]
+  dateMin: string
+  dateMax: string
+  tagsFound: string[]
+  machinesFound: string[]
+  plantsFound: string[]
+}
 
 // Tag values that are semantically equivalent to "no tag" — these should NOT
 // be counted as real tags for compliance purposes.
@@ -35,13 +49,6 @@ function getPlant(device: string): string {
   }
 }
 
-function hasChangeoverTag(tags: string): boolean {
-  if (!tags) return false
-  // Split on commas, semicolons, newlines, and trim
-  const parts = tags.split(/[,;\n\r]+/).map(t => t.trim().toLowerCase())
-  return parts.some(t => t === CHANGEOVER_TAG)
-}
-
 function getChangeoverType(device: string): string {
   // Second char of device ID determines type: M=Color Change, K=Roll Change, L=Foam Change
   // Prioritize M > K > L
@@ -62,15 +69,14 @@ export function parseCSV(csvText: string): ColorChangeEvent[] {
   const events: ColorChangeEvent[] = []
 
   for (const row of result.data) {
-    // Skip if no tags or no changeover tag
-    if (!hasChangeoverTag(row.Tags)) continue
+    // CHANGEOVER GATE: include ONLY if the raw tags contain an allowed changeover
+    // tag. Classification is purely tag-driven — never inferred from device,
+    // duration, or machine status. (Garbage in, garbage out.)
+    const classification = classifyChangeover(row.Tags)
+    if (!classification.isChangeover) continue
 
-    // Accept M (Color Change), K (Roll Change), L (Foam Change) devices
     const device = (row.Devices || '').trim()
     if (!device) continue
-    const d = device.toUpperCase()
-    if (!d.includes('M') && !d.includes('K') && !d.includes('L')) continue
-    const changeoverType = getChangeoverType(device)
 
     // Skip ongoing events
     const durationStr = (row['Duration (minutes)'] || '').trim()
@@ -93,16 +99,79 @@ export function parseCSV(csvText: string): ColorChangeEvent[] {
       duration,
       device,
       plant: getPlant(device),
-      changeover_type: changeoverType,
+      changeover_type: getChangeoverType(device),
       status: (row.Status || '').trim(),
       calendar_date: getCalendarDate(start_dt),
       week_start: getWeekStart(start_dt),
       tags: (row.Tags || '').trim(),
       comments: (row.Comments || '').trim(),
+      changeover_match_tag: classification.matchedTag ?? undefined,
     })
   }
 
   return events
+}
+
+// Build an audit summary of a Guidewheel Issues file: how many rows were read,
+// how many are real changeovers, how many valid downtime rows were excluded
+// (and the most common excluded tags), plus the date/tag/machine/plant coverage.
+// Used by the upload path so a file can never "silently fail".
+export function summarizeIssues(csvText: string): IssuesDiagnostics {
+  const result = Papa.parse<RawRow>(csvText, { header: true, skipEmptyLines: true, dynamicTyping: false })
+  let changeoverEvents = 0
+  let excludedNonChangeover = 0
+  let skippedInvalid = 0
+  const excludedTagCounts = new Map<string, number>()
+  const tagsFound = new Set<string>()
+  const machinesFound = new Set<string>()
+  const plantsFound = new Set<string>()
+  const dates: string[] = []
+
+  for (const row of result.data) {
+    const device = (row.Devices || '').trim()
+    const durationStr = (row['Duration (minutes)'] || '').trim()
+    const endStr = (row.End || '').trim()
+    const start_dt = parseTimestamp(row.Start)
+    const duration = parseFloat(durationStr)
+    const validRow = Boolean(
+      device && durationStr && durationStr.toLowerCase() !== 'ongoing' &&
+      !isNaN(duration) && duration > 0 && endStr && start_dt
+    )
+    if (!validRow) { skippedInvalid++; continue }
+
+    if (device) machinesFound.add(device)
+    if (device) plantsFound.add(getPlant(device))
+    if (start_dt) dates.push(getCalendarDate(start_dt))
+    for (const t of splitTags(row.Tags)) tagsFound.add(t)
+
+    if (classifyChangeover(row.Tags).isChangeover) {
+      changeoverEvents++
+    } else {
+      excludedNonChangeover++
+      for (const t of splitTags(row.Tags)) {
+        excludedTagCounts.set(t, (excludedTagCounts.get(t) ?? 0) + 1)
+      }
+    }
+  }
+
+  dates.sort()
+  const topExcludedTags = Array.from(excludedTagCounts.entries())
+    .map(([tag, count]) => ({ tag, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 10)
+
+  return {
+    rowsRead: result.data.length,
+    changeoverEvents,
+    excludedNonChangeover,
+    skippedInvalid,
+    topExcludedTags,
+    dateMin: dates[0] ?? '',
+    dateMax: dates[dates.length - 1] ?? '',
+    tagsFound: Array.from(tagsFound).sort(),
+    machinesFound: Array.from(machinesFound).sort(),
+    plantsFound: Array.from(plantsFound).sort(),
+  }
 }
 
 export function parseEnergyCSV(csvText: string): EnergyRow[] {
@@ -114,8 +183,12 @@ export function parseEnergyCSV(csvText: string): EnergyRow[] {
     const parts = line.split(';')
     if (parts.length < 3) continue
     const machine = parts[0].replace(/"/g, '').trim()
-    const date = parts[1].replace(/"/g, '').trim()
+    const rawDate = parts[1].replace(/"/g, '').trim()
     const kWh = parseFloat(parts[2].replace(/"/g, '').trim())
+    // Normalize the date to YYYY-MM-DD. Handles ISO, slash, and Excel-serial
+    // formats and rejects time-only fractions (e.g. "0.2633") so they never get
+    // stored and later rendered as a decimal "date".
+    const date = normalizeDateOnly(rawDate)
     if (!machine || !date || isNaN(kWh)) continue
     rows.push({ machine, date, kWh })
   }

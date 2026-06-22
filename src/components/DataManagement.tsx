@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { apiFetch } from '../utils/api'
+import { normalizeDateOnly } from '../utils/dates'
 import type { EnergyRow, DowntimeEvent, OEERecord, RuntimeRecord, ColorChangeEvent } from '../data/types'
 
 interface Props {
@@ -76,9 +77,11 @@ export default function DataManagement({ dataStatus, energyRows, runtimeRecords,
       .finally(() => setLoading(false))
   }, [])
 
-  // Derive date ranges from in-memory data for cross-check
-  const energyRange = energyRows.length > 0
-    ? { min: energyRows.map(r => r.date).sort()[0], max: energyRows.map(r => r.date).sort().reverse()[0] }
+  // Derive date ranges from in-memory data for cross-check. Energy dates are
+  // normalized so a stray Excel decimal can never surface as a "date".
+  const energyDatesSorted = energyRows.map(r => normalizeDateOnly(r.date)).filter((d): d is string => !!d).sort()
+  const energyRange = energyDatesSorted.length > 0
+    ? { min: energyDatesSorted[0], max: energyDatesSorted[energyDatesSorted.length - 1] }
     : null
   const runtimeRange = runtimeRecords.length > 0
     ? { min: runtimeRecords.map(r => r.date).sort()[0], max: runtimeRecords.map(r => r.date).sort().reverse()[0] }

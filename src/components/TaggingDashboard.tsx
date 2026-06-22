@@ -11,7 +11,16 @@ import {
   REVIEW_REASON_CATEGORIES,
   matchesReasonCategory,
 } from '../data/taggingAggregations'
+import { getMachineTypeKey, MACHINE_TYPE_LABELS } from '../data/energyAggregations'
 import { axisTick, tooltipStyle, gridStroke } from '../utils/chartTheme'
+
+const PLANT_OPTIONS = ['All', 'Addison', 'Mayflower', 'Sparks'] as const
+const MACHINE_TYPE_OPTIONS = [
+  { key: 'All', label: 'All Machine Types' },
+  { key: 'M', label: 'Molding' },
+  { key: 'K', label: 'Kleen Peel' },
+  { key: 'L', label: 'Liners' },
+] as const
 
 interface Props {
   events: DowntimeEvent[]
@@ -69,6 +78,9 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
   const [criticalThreshold, setCriticalThreshold] = useState(50)
   const [reviewPlantFilter, setReviewPlantFilter] = useState('All')
   const [reviewReasonFilter, setReviewReasonFilter] = useState('all')
+  // Top-level filters applied to the WHOLE tab.
+  const [plantFilter, setPlantFilter] = useState('All')
+  const [machineTypeFilter, setMachineTypeFilter] = useState('All')
 
   // Date extent of all loaded events
   const dateExtent = useMemo(() => {
@@ -91,13 +103,21 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
   const dateBeforeData = !noDataInRange && Boolean(dateExtent.min && effectiveDateFrom < dateExtent.min)
   const rangeExceedsData = !noDataInRange && effectiveDateTo > dateExtent.max && dateExtent.max !== ''
 
-  // Apply date range filter
+  // Apply date range + top-level plant + machine type filters to the whole tab.
   const filteredEvents = useMemo(
-    () => events.filter(
-      e => e.calendar_date >= effectiveDateFrom && e.calendar_date <= effectiveDateTo
-    ),
-    [events, effectiveDateFrom, effectiveDateTo]
+    () => events.filter(e => {
+      if (e.calendar_date < effectiveDateFrom || e.calendar_date > effectiveDateTo) return false
+      if (plantFilter !== 'All' && e.plant !== plantFilter) return false
+      if (machineTypeFilter !== 'All' && getMachineTypeKey(e.device) !== machineTypeFilter) return false
+      return true
+    }),
+    [events, effectiveDateFrom, effectiveDateTo, plantFilter, machineTypeFilter]
   )
+
+  const filtersActive = plantFilter !== 'All' || machineTypeFilter !== 'All'
+  const machineTypeLabel = machineTypeFilter === 'All'
+    ? 'All Machine Types'
+    : MACHINE_TYPE_LABELS[machineTypeFilter as 'M' | 'K' | 'L']
 
   const compliance = useMemo(
     () => taggingCompliance(filteredEvents, complianceTarget),
@@ -174,9 +194,35 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
   return (
     <div className="space-y-6">
 
-      {/* ── Date Range Filter ─────────────────────────────────────────────── */}
+      {/* ── Date Range + Plant + Machine Type Filters ─────────────────────── */}
       <div className={cardCls}>
         <div className="flex flex-wrap items-end gap-4">
+          {/* Plant filter (applies to entire tab) */}
+          <div>
+            <label className="bh-metric-label mb-1 block">Plant</label>
+            <select
+              value={plantFilter}
+              onChange={e => setPlantFilter(e.target.value)}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
+            >
+              {PLANT_OPTIONS.map(p => (
+                <option key={p} value={p}>{p === 'All' ? 'All Plants' : p}</option>
+              ))}
+            </select>
+          </div>
+          {/* Machine Type filter (applies to entire tab) */}
+          <div>
+            <label className="bh-metric-label mb-1 block">Machine Type</label>
+            <select
+              value={machineTypeFilter}
+              onChange={e => setMachineTypeFilter(e.target.value)}
+              className="text-sm rounded px-3 py-1.5 bg-background border border-border text-foreground"
+            >
+              {MACHINE_TYPE_OPTIONS.map(o => (
+                <option key={o.key} value={o.key}>{o.label}</option>
+              ))}
+            </select>
+          </div>
           <div>
             <label className="bh-metric-label mb-1 block">
               From
@@ -249,13 +295,26 @@ export default function TaggingDashboard({ events, complianceTarget, onTargetCha
         )}
       </div>
 
-      {/* ── Date range context ───────────────────────────────────────────── */}
+      {/* ── Date range + filter context ──────────────────────────────────── */}
       {(effectiveDateFrom || effectiveDateTo) && (
-        <div className="text-xs text-muted-foreground px-1">
-          Showing <span className="font-medium text-foreground">{effectiveDateFrom}</span> to <span className="font-medium text-foreground">{effectiveDateTo}</span>
-          {' '}·{' '}{filteredEvents.length.toLocaleString()} events
+        <div className="text-xs text-muted-foreground px-1 flex flex-wrap items-center gap-x-2">
+          <span>
+            Showing <span className="font-medium text-foreground">{effectiveDateFrom}</span> to <span className="font-medium text-foreground">{effectiveDateTo}</span>
+            {' '}·{' '}{filteredEvents.length.toLocaleString()} events
+          </span>
+          <span className="font-medium text-foreground">
+            · {plantFilter === 'All' ? 'All Plants' : plantFilter} · {machineTypeLabel}
+          </span>
           {dateExtent.min && (
-            <span className="ml-2 text-muted-foreground">(available data: {dateExtent.min} to {dateExtent.max})</span>
+            <span className="text-muted-foreground">(available data: {dateExtent.min} to {dateExtent.max})</span>
+          )}
+          {filtersActive && (
+            <button
+              onClick={() => { setPlantFilter('All'); setMachineTypeFilter('All') }}
+              className="text-btn-primary hover:underline"
+            >
+              Clear plant / machine filters
+            </button>
           )}
         </div>
       )}

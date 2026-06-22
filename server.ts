@@ -8,9 +8,11 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import rateLimit from 'express-rate-limit'
 import compression from 'compression'
-import { parseCSV, parseEnergyCSV, parseDowntimeCSV, parseOEECSV } from './src/data/parser'
+import { parseCSV, parseEnergyCSV, parseDowntimeCSV, parseOEECSV, summarizeIssues } from './src/data/parser'
 import type { OEEDiagnostics } from './src/data/parser'
 import type { ColorChangeEvent, EnergyRow, RuntimeRecord } from './src/data/types'
+import { classifyChangeover } from './src/data/changeover'
+import { normalizeDateOnly } from './src/utils/dates'
 
 // CJS-interop require — used for the xlsx package (CommonJS module)
 const _require = createRequire(import.meta.url)
@@ -129,16 +131,26 @@ db.exec(`
 try {
   db.exec("ALTER TABLE issues ADD COLUMN changeover_type TEXT NOT NULL DEFAULT 'Color Change'")
 } catch { /* column already exists */ }
+// is_changeover: 1 if the row's tags include an allowed changeover tag, else 0.
+// Backfilled from raw tags by runChangeoverReclassify() on startup. NULL means
+// "not yet classified" and is treated as not-a-changeover until backfill runs.
+try {
+  db.exec('ALTER TABLE issues ADD COLUMN is_changeover INTEGER')
+} catch { /* column already exists */ }
+// changeover_match_tag: the raw tag that qualified the row (for audit display).
+try {
+  db.exec('ALTER TABLE issues ADD COLUMN changeover_match_tag TEXT')
+} catch { /* column already exists */ }
 
 // ── Prepared Statements ────────────────────────────────────────────────────
 const stmts = {
   insertIssue: db.prepare(`
     INSERT OR IGNORE INTO issues
       (row_hash, start_dt, end_dt, duration, device, plant, changeover_type, status,
-       calendar_date, week_start, tags, comments)
+       calendar_date, week_start, tags, comments, is_changeover, changeover_match_tag)
     VALUES
       (@row_hash, @start_dt, @end_dt, @duration, @device, @plant, @changeover_type, @status,
-       @calendar_date, @week_start, @tags, @comments)
+       @calendar_date, @week_start, @tags, @comments, @is_changeover, @changeover_match_tag)
   `),
   insertEnergyAvg: db.prepare(`
     INSERT OR IGNORE INTO energy_average (row_hash, machine, date, kwh)
@@ -166,11 +178,14 @@ const stmts = {
     VALUES
       (@row_hash, @machine, @date, @oee, @availability, @performance, @quality)
   `),
-  getIssues: db.prepare('SELECT * FROM issues ORDER BY calendar_date, device'),
+  // Changeover analysis reads ONLY rows whose tags qualify as a changeover.
+  // is_changeover = 1 is enforced here so misclassified historical rows (e.g. the
+  // 2K2-01 "No Product / No Labor" event) can never reach any changeover view.
+  getIssues: db.prepare('SELECT * FROM issues WHERE is_changeover = 1 ORDER BY calendar_date, device'),
   getEnergyAvg: db.prepare('SELECT machine, date, kwh FROM energy_average ORDER BY machine, date'),
   getDowntime: db.prepare('SELECT * FROM downtime_events ORDER BY calendar_date, device'),
   getOEE: db.prepare('SELECT * FROM oee_data ORDER BY machine, date'),
-  statsIssues: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM issues'),
+  statsIssues: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM issues WHERE is_changeover = 1'),
   statsEnergyAvg: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM energy_average'),
   statsEnergyMax: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM energy_max'),
   statsDowntime: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM downtime_events'),
@@ -405,6 +420,7 @@ const energySessions = new Map<string, number>() // token → expiry ms
 
 // ── Ingestion ──────────────────────────────────────────────────────────────
 function ingestIssues(csvText: string, fileName: string) {
+  // parseCSV returns ONLY changeover-tagged events (centralized classification).
   const events = parseCSV(csvText)
   let rowsAdded = 0
   let duplicatesSkipped = 0
@@ -425,6 +441,8 @@ function ingestIssues(csvText: string, fileName: string) {
         week_start: e.week_start,
         tags: e.tags,
         comments: e.comments,
+        is_changeover: 1,
+        changeover_match_tag: e.changeover_match_tag ?? null,
       })
       r.changes > 0 ? rowsAdded++ : duplicatesSkipped++
     }
@@ -437,10 +455,13 @@ function ingestIssues(csvText: string, fileName: string) {
     duplicates_skipped: duplicatesSkipped,
   })
 
-  // Also ingest all downtime events from the same CSV
+  // Also ingest all downtime events from the same CSV (full raw set, not just changeovers)
   const downtimeResult = ingestDowntime(csvText, fileName)
 
-  return { rowsAdded, duplicatesSkipped, total: events.length, downtime: downtimeResult }
+  // Full audit summary so uploads surface exactly what happened — never silent.
+  const diagnostics = summarizeIssues(csvText)
+
+  return { rowsAdded, duplicatesSkipped, total: events.length, downtime: downtimeResult, issuesDiagnostics: diagnostics }
 }
 
 function ingestDowntime(csvText: string, fileName: string) {
@@ -610,6 +631,89 @@ function runDowntimeBackfill() {
 
 runDowntimeBackfill()
 
+// ── Changeover Reclassification Backfill ─────────────────────────────────────
+// Re-derive is_changeover / changeover_match_tag for EVERY row in the issues
+// table from its raw tags, using the centralized classifier. This corrects rows
+// that were ingested under older/looser logic (e.g. the 2K2-01 6h15m
+// "No Product / No Labor" event) so they are excluded from all changeover views.
+//
+// Non-destructive: raw rows are preserved (tags, comments, durations) and the
+// full downtime history remains in downtime_events. We only flip a flag.
+function runChangeoverReclassify() {
+  const rows = db.prepare('SELECT row_hash, tags, calendar_date FROM issues').all() as
+    { row_hash: string; tags: string | null; calendar_date: string }[]
+  if (rows.length === 0) return
+
+  const update = db.prepare('UPDATE issues SET is_changeover = @flag, changeover_match_tag = @tag WHERE row_hash = @hash')
+
+  let changeover = 0
+  let excluded = 0
+  const excludedTagCounts = new Map<string, number>()
+  let dateMin = ''
+  let dateMax = ''
+
+  db.transaction(() => {
+    for (const row of rows) {
+      const c = classifyChangeover(row.tags || '')
+      update.run({ flag: c.isChangeover ? 1 : 0, tag: c.matchedTag ?? null, hash: row.row_hash })
+      if (c.isChangeover) {
+        changeover++
+      } else {
+        excluded++
+        for (const t of (row.tags || '').split(/[,;|\n\r]+/).map(s => s.trim()).filter(Boolean)) {
+          excludedTagCounts.set(t, (excludedTagCounts.get(t) ?? 0) + 1)
+        }
+      }
+      if (row.calendar_date) {
+        if (!dateMin || row.calendar_date < dateMin) dateMin = row.calendar_date
+        if (!dateMax || row.calendar_date > dateMax) dateMax = row.calendar_date
+      }
+    }
+  })()
+
+  const topExcluded = Array.from(excludedTagCounts.entries())
+    .sort((a, b) => b[1] - a[1]).slice(0, 8)
+    .map(([tag, n]) => `${tag} (${n})`)
+
+  console.log('[changeover-reclassify] ───────────────────────────────────────')
+  console.log(`[changeover-reclassify] total issues rows:        ${rows.length}`)
+  console.log(`[changeover-reclassify] classified as changeover: ${changeover}`)
+  console.log(`[changeover-reclassify] excluded (non-changeover): ${excluded}`)
+  console.log(`[changeover-reclassify] date range:               ${dateMin || '—'} to ${dateMax || '—'}`)
+  console.log(`[changeover-reclassify] top excluded tags:        ${topExcluded.join(', ') || '(none)'}`)
+  console.log('[changeover-reclassify] ───────────────────────────────────────')
+}
+
+runChangeoverReclassify()
+
+// ── Energy Date Normalization Backfill ───────────────────────────────────────
+// Existing energy rows may hold dates as slash strings ("2026/06/18 08:18") or
+// stray Excel time fractions ("0.2633…"). Normalize every date to YYYY-MM-DD and
+// delete rows whose date cannot be interpreted as a real calendar date so the UI
+// never shows a decimal "date". Runs every startup; idempotent.
+function runEnergyDateBackfill() {
+  for (const table of ['energy_average', 'energy_max'] as const) {
+    const rows = db.prepare(`SELECT row_hash, date FROM ${table}`).all() as { row_hash: string; date: string }[]
+    if (rows.length === 0) continue
+    const update = db.prepare(`UPDATE ${table} SET date = @date WHERE row_hash = @hash`)
+    const del = db.prepare(`DELETE FROM ${table} WHERE row_hash = @hash`)
+    let fixed = 0
+    let removed = 0
+    db.transaction(() => {
+      for (const row of rows) {
+        const norm = normalizeDateOnly(row.date)
+        if (!norm) { del.run({ hash: row.row_hash }); removed++; continue }
+        if (norm !== row.date) { update.run({ date: norm, hash: row.row_hash }); fixed++ }
+      }
+    })()
+    if (fixed > 0 || removed > 0) {
+      console.log(`[energy-date-backfill] ${table}: ${fixed} dates normalized, ${removed} invalid rows removed`)
+    }
+  }
+}
+
+runEnergyDateBackfill()
+
 // ── Express App ────────────────────────────────────────────────────────────
 const app = express()
 
@@ -743,7 +847,7 @@ app.get('/api/admin/diagnostics', (_req, res) => {
   const oeeStat = stmts.statsOEE.get() as { n: number; last: string | null }
   const runtimeStat = stmts.statsRuntime.get() as { n: number; last: string | null }
 
-  const issueDates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM issues').get() as { min: string | null; max: string | null }
+  const issueDates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM issues WHERE is_changeover = 1').get() as { min: string | null; max: string | null }
   const avgDates = db.prepare('SELECT MIN(date) as min, MAX(date) as max FROM energy_average').get() as { min: string | null; max: string | null }
   const downtimeDates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM downtime_events').get() as { min: string | null; max: string | null }
   const oeeDates = db.prepare('SELECT MIN(date) as min, MAX(date) as max FROM oee_data').get() as { min: string | null; max: string | null }
@@ -795,7 +899,8 @@ app.post('/api/settings/energy', (req: Request, res: Response) => {
 // ── API: Get Issues ─────────────────────────────────────────────────────────
 app.get('/api/data/issues', (_req, res) => {
   const rows = stmts.getIssues.all() as any[]
-  const events: ColorChangeEvent[] = rows.map(r => ({
+  const events = rows.map(r => ({
+    id: r.row_hash,
     start_dt: new Date(r.start_dt),
     end_dt: new Date(r.end_dt),
     duration: r.duration,
@@ -807,7 +912,10 @@ app.get('/api/data/issues', (_req, res) => {
     week_start: r.week_start,
     tags: r.tags || '',
     comments: r.comments || '',
-  }))
+    // Audit: which raw tag qualified this row as a changeover. Re-derived on read
+    // so it is always consistent with the centralized classifier.
+    changeover_match_tag: r.changeover_match_tag || classifyChangeover(r.tags || '').matchedTag || '',
+  })) satisfies (ColorChangeEvent & { id: string })[]
   const stat = stmts.statsIssues.get() as { n: number; last: string | null }
   res.json({ events, total: events.length, lastUpdated: stat.last })
 })
@@ -907,7 +1015,7 @@ app.get('/api/data/ingestion-log', (_req, res) => {
   ).all() as { id: number; file_name: string; table_name: string; rows_added: number; duplicates_skipped: number; ingested_at: string }[]
   // Also return dataset date ranges for the inventory section
   const ranges = {
-    issues: db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max, COUNT(*) as n FROM issues').get() as { min: string | null; max: string | null; n: number },
+    issues: db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max, COUNT(*) as n FROM issues WHERE is_changeover = 1').get() as { min: string | null; max: string | null; n: number },
     energy_average: db.prepare('SELECT MIN(date) as min, MAX(date) as max, COUNT(*) as n FROM energy_average').get() as { min: string | null; max: string | null; n: number },
     downtime_events: db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max, COUNT(*) as n FROM downtime_events').get() as { min: string | null; max: string | null; n: number },
     oee_data: db.prepare('SELECT MIN(date) as min, MAX(date) as max, COUNT(*) as n FROM oee_data').get() as { min: string | null; max: string | null; n: number },
@@ -1021,15 +1129,16 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
       result = ingestEnergy(csvText, fileName, type)
     }
 
-    if (result.rowsAdded === 0 && (result.duplicatesSkipped as number) > 0) {
-      if (type === 'energy_average' || type === 'energy_max') {
-        const tbl = type === 'energy_average' ? 'energy_average' : 'energy_max'
-        const dates = db.prepare(`SELECT MIN(date) as min, MAX(date) as max FROM ${tbl}`).get() as { min: string | null; max: string | null }
-        result = { ...result, dataMin: dates.min, dataMax: dates.max }
-      } else if (type === 'issues') {
-        const dates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM issues').get() as { min: string | null; max: string | null }
-        result = { ...result, dataMin: dates.min, dataMax: dates.max }
-      }
+    // Always attach the live date range so the UI reflects the ACTUAL latest
+    // loaded record (not upload metadata or filenames) — fixes "stuck through
+    // May 22" reporting after a successful upload.
+    if (type === 'energy_average' || type === 'energy_max') {
+      const tbl = type === 'energy_average' ? 'energy_average' : 'energy_max'
+      const dates = db.prepare(`SELECT MIN(date) as min, MAX(date) as max FROM ${tbl}`).get() as { min: string | null; max: string | null }
+      result = { ...result, dataMin: dates.min, dataMax: dates.max }
+    } else if (type === 'issues') {
+      const dates = db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max FROM issues WHERE is_changeover = 1').get() as { min: string | null; max: string | null }
+      result = { ...result, dataMin: dates.min, dataMax: dates.max }
     }
 
     res.json({ ...result, type, fileName, fileType: 'csv' })

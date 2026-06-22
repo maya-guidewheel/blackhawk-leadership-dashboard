@@ -64,6 +64,18 @@ interface UploadFeedback {
     dateMax: string
     skippedReasons: string[]
   }
+  issuesDiagnostics?: {
+    rowsRead: number
+    changeoverEvents: number
+    excludedNonChangeover: number
+    skippedInvalid: number
+    topExcludedTags: { tag: string; count: number }[]
+    dateMin: string
+    dateMax: string
+    tagsFound: string[]
+    machinesFound: string[]
+    plantsFound: string[]
+  }
 }
 
 function getDefaultFilters(): FilterState {
@@ -499,6 +511,33 @@ export default function App() {
                   {uploadFeedback.runtimeDiagnostics.skippedReasons.length > 0 && (
                     <div><span className="font-semibold text-foreground">Skipped:</span> {uploadFeedback.runtimeDiagnostics.skippedReasons.join(' · ')}</div>
                   )}
+                </div>
+              )}
+              {uploadFeedback.type === 'issues' && uploadFeedback.issuesDiagnostics && (
+                <div className="mt-2 text-xs space-y-1 text-muted-foreground">
+                  <div>
+                    <span className="font-semibold text-foreground">Rows read:</span> {uploadFeedback.issuesDiagnostics.rowsRead.toLocaleString()}
+                    {' · '}<span className="font-semibold text-foreground">Changeovers:</span> {uploadFeedback.issuesDiagnostics.changeoverEvents.toLocaleString()}
+                    {' · '}<span className="font-semibold text-foreground">Excluded (non-changeover):</span> {uploadFeedback.issuesDiagnostics.excludedNonChangeover.toLocaleString()}
+                    {uploadFeedback.issuesDiagnostics.skippedInvalid > 0 && (
+                      <>{' · '}<span className="font-semibold text-foreground">Skipped (invalid):</span> {uploadFeedback.issuesDiagnostics.skippedInvalid.toLocaleString()}</>
+                    )}
+                  </div>
+                  {uploadFeedback.issuesDiagnostics.dateMin && (
+                    <div><span className="font-semibold text-foreground">Date range:</span> {uploadFeedback.issuesDiagnostics.dateMin} to {uploadFeedback.issuesDiagnostics.dateMax}</div>
+                  )}
+                  <div>
+                    <span className="font-semibold text-foreground">Coverage:</span> {uploadFeedback.issuesDiagnostics.plantsFound.join(', ') || '—'}
+                    {' · '}{uploadFeedback.issuesDiagnostics.machinesFound.length} machines
+                    {' · '}{uploadFeedback.issuesDiagnostics.tagsFound.length} distinct tags
+                  </div>
+                  {uploadFeedback.issuesDiagnostics.topExcludedTags.length > 0 && (
+                    <div>
+                      <span className="font-semibold text-foreground">Top excluded tags:</span>{' '}
+                      {uploadFeedback.issuesDiagnostics.topExcludedTags.slice(0, 6).map(t => `${t.tag} (${t.count})`).join(', ')}
+                    </div>
+                  )}
+                  <div className="italic">Only "Change-Color/foam/label" and "Change Job" tags count as changeovers.</div>
                 </div>
               )}
               {uploadFeedback.rowsAdded === 0 && uploadFeedback.type === 'oee' && uploadFeedback.diagnostics && (
