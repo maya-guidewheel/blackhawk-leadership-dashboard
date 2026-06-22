@@ -8,8 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import rateLimit from 'express-rate-limit'
 import compression from 'compression'
-import { parseCSV, parseEnergyCSV, parseDowntimeCSV, parseOEECSV, summarizeIssues } from './src/data/parser'
-import type { OEEDiagnostics } from './src/data/parser'
+import { parseEnergyCSV, parseOEECSV, parseIssueRows, summarizeIssues } from './src/data/parser'
+import type { OEEDiagnostics, ParsedIssueRow } from './src/data/parser'
 import type { ColorChangeEvent, EnergyRow, RuntimeRecord } from './src/data/types'
 import { classifyChangeover } from './src/data/changeover'
 import { normalizeDateOnly } from './src/utils/dates'
@@ -141,16 +141,41 @@ try {
 try {
   db.exec('ALTER TABLE issues ADD COLUMN changeover_match_tag TEXT')
 } catch { /* column already exists */ }
+// Upsert audit columns. created_at = original ingested_at (never overwritten);
+// updated_at + source_file refresh every time a re-upload changes the row.
+for (const tbl of ['issues', 'downtime_events']) {
+  try { db.exec(`ALTER TABLE ${tbl} ADD COLUMN updated_at TEXT`) } catch { /* exists */ }
+  try { db.exec(`ALTER TABLE ${tbl} ADD COLUMN source_file TEXT`) } catch { /* exists */ }
+}
+// ingestion_log gains insert/update/unchanged breakdown so the Data Management
+// tab can show refresh behavior, not just "duplicates skipped".
+try { db.exec('ALTER TABLE ingestion_log ADD COLUMN rows_updated INTEGER NOT NULL DEFAULT 0') } catch { /* exists */ }
+try { db.exec('ALTER TABLE ingestion_log ADD COLUMN rows_unchanged INTEGER NOT NULL DEFAULT 0') } catch { /* exists */ }
 
 // ── Prepared Statements ────────────────────────────────────────────────────
 const stmts = {
+  // Upsert key = sha256(start_dt ISO | device). See ingestIssues() for rationale.
+  selectIssue: db.prepare('SELECT * FROM issues WHERE row_hash = @row_hash'),
   insertIssue: db.prepare(`
-    INSERT OR IGNORE INTO issues
+    INSERT INTO issues
       (row_hash, start_dt, end_dt, duration, device, plant, changeover_type, status,
-       calendar_date, week_start, tags, comments, is_changeover, changeover_match_tag)
+       calendar_date, week_start, tags, comments, is_changeover, changeover_match_tag,
+       updated_at, source_file)
     VALUES
       (@row_hash, @start_dt, @end_dt, @duration, @device, @plant, @changeover_type, @status,
-       @calendar_date, @week_start, @tags, @comments, @is_changeover, @changeover_match_tag)
+       @calendar_date, @week_start, @tags, @comments, @is_changeover, @changeover_match_tag,
+       datetime('now'), @source_file)
+  `),
+  // Update mutable Guidewheel fields on re-upload. ingested_at (created_at) is
+  // intentionally NOT touched so original-import time is preserved.
+  updateIssue: db.prepare(`
+    UPDATE issues SET
+      end_dt = @end_dt, duration = @duration, plant = @plant,
+      changeover_type = @changeover_type, status = @status, calendar_date = @calendar_date,
+      week_start = @week_start, tags = @tags, comments = @comments,
+      is_changeover = @is_changeover, changeover_match_tag = @changeover_match_tag,
+      updated_at = datetime('now'), source_file = @source_file
+    WHERE row_hash = @row_hash
   `),
   insertEnergyAvg: db.prepare(`
     INSERT OR IGNORE INTO energy_average (row_hash, machine, date, kwh)
@@ -161,16 +186,27 @@ const stmts = {
     VALUES (@row_hash, @machine, @date, @kwh)
   `),
   logIngestion: db.prepare(`
-    INSERT INTO ingestion_log (file_name, table_name, rows_added, duplicates_skipped)
-    VALUES (@file_name, @table_name, @rows_added, @duplicates_skipped)
+    INSERT INTO ingestion_log (file_name, table_name, rows_added, duplicates_skipped, rows_updated, rows_unchanged)
+    VALUES (@file_name, @table_name, @rows_added, @duplicates_skipped, @rows_updated, @rows_unchanged)
   `),
+  selectDowntime: db.prepare('SELECT * FROM downtime_events WHERE row_hash = @row_hash'),
   insertDowntime: db.prepare(`
-    INSERT OR IGNORE INTO downtime_events
+    INSERT INTO downtime_events
       (row_hash, start_dt, end_dt, duration, device, plant, status,
-       calendar_date, week_start, shift, tags, is_tagged, is_planned, comments)
+       calendar_date, week_start, shift, tags, is_tagged, is_planned, comments,
+       updated_at, source_file)
     VALUES
       (@row_hash, @start_dt, @end_dt, @duration, @device, @plant, @status,
-       @calendar_date, @week_start, @shift, @tags, @is_tagged, @is_planned, @comments)
+       @calendar_date, @week_start, @shift, @tags, @is_tagged, @is_planned, @comments,
+       datetime('now'), @source_file)
+  `),
+  updateDowntime: db.prepare(`
+    UPDATE downtime_events SET
+      end_dt = @end_dt, duration = @duration, plant = @plant, status = @status,
+      calendar_date = @calendar_date, week_start = @week_start, shift = @shift,
+      tags = @tags, is_tagged = @is_tagged, is_planned = @is_planned, comments = @comments,
+      updated_at = datetime('now'), source_file = @source_file
+    WHERE row_hash = @row_hash
   `),
   insertOEE: db.prepare(`
     INSERT OR IGNORE INTO oee_data
@@ -409,6 +445,8 @@ function ingestRuntime(buffer: Buffer, fileName: string) {
     table_name: 'runtime_data',
     rows_added: rowsAdded,
     duplicates_skipped: duplicatesSkipped,
+    rows_updated: 0,
+    rows_unchanged: duplicatesSkipped,
   })
   return { rowsAdded, duplicatesSkipped, total: records.length, diagnostics }
 }
@@ -419,16 +457,26 @@ function ingestRuntime(buffer: Buffer, fileName: string) {
 const energySessions = new Map<string, number>() // token → expiry ms
 
 // ── Ingestion ──────────────────────────────────────────────────────────────
+// UPSERT KEY: sha256(start_dt ISO | device). Guidewheel issue exports carry no
+// stable issue/event ID column, so the dedupe identity is the device plus the
+// event start timestamp (an issue can't start twice on one device at the same
+// instant). End time, duration, tags, status, comments and the derived
+// changeover classification are all MUTABLE and refresh on re-upload — so when a
+// tag is corrected in Guidewheel (e.g. 2K2-01 changeover → No Product/No Labor),
+// re-uploading updates the existing row instead of skipping it as a duplicate.
 function ingestIssues(csvText: string, fileName: string) {
-  // parseCSV returns ONLY changeover-tagged events (centralized classification).
-  const events = parseCSV(csvText)
-  let rowsAdded = 0
-  let duplicatesSkipped = 0
+  // ALL valid rows (not just changeovers) so a row that LOST its changeover tag
+  // still reaches the upsert and gets reclassified out of the Changeover views.
+  const rows = parseIssueRows(csvText)
+  const src = hashFileName(fileName)
+
+  let inserted = 0, updated = 0, unchanged = 0
+  let changeoversAdded = 0, changeoversRemoved = 0
 
   db.transaction(() => {
-    for (const e of events) {
+    for (const e of rows) {
       const hash = rowHash(`${e.start_dt.toISOString()}|${e.device}`)
-      const r = stmts.insertIssue.run({
+      const params = {
         row_hash: hash,
         start_dt: e.start_dt.toISOString(),
         end_dt: e.end_dt.toISOString(),
@@ -441,38 +489,73 @@ function ingestIssues(csvText: string, fileName: string) {
         week_start: e.week_start,
         tags: e.tags,
         comments: e.comments,
-        is_changeover: 1,
+        is_changeover: e.is_changeover ? 1 : 0,
         changeover_match_tag: e.changeover_match_tag ?? null,
-      })
-      r.changes > 0 ? rowsAdded++ : duplicatesSkipped++
+        source_file: src,
+      }
+      const existing = stmts.selectIssue.get({ row_hash: hash }) as Record<string, unknown> | undefined
+      if (!existing) {
+        stmts.insertIssue.run(params)
+        inserted++
+        if (e.is_changeover) changeoversAdded++
+      } else {
+        const wasChangeover = existing.is_changeover === 1
+        // Re-upload updates only if a mutable field actually changed; otherwise
+        // it is a true unchanged duplicate and is skipped.
+        const changed =
+          existing.end_dt !== params.end_dt ||
+          existing.duration !== params.duration ||
+          existing.plant !== params.plant ||
+          (existing.changeover_type ?? '') !== params.changeover_type ||
+          (existing.status ?? '') !== params.status ||
+          existing.calendar_date !== params.calendar_date ||
+          existing.week_start !== params.week_start ||
+          (existing.tags ?? '') !== params.tags ||
+          (existing.comments ?? '') !== params.comments ||
+          (wasChangeover ? 1 : 0) !== params.is_changeover ||
+          (existing.changeover_match_tag ?? null) !== params.changeover_match_tag
+        if (changed) {
+          stmts.updateIssue.run(params)
+          updated++
+          if (!wasChangeover && e.is_changeover) changeoversAdded++
+          if (wasChangeover && !e.is_changeover) changeoversRemoved++
+        } else {
+          unchanged++
+        }
+      }
     }
   })()
 
   stmts.logIngestion.run({
-    file_name: hashFileName(fileName),
-    table_name: 'issues',
-    rows_added: rowsAdded,
-    duplicates_skipped: duplicatesSkipped,
+    file_name: src, table_name: 'issues',
+    rows_added: inserted, duplicates_skipped: unchanged,
+    rows_updated: updated, rows_unchanged: unchanged,
   })
 
-  // Also ingest all downtime events from the same CSV (full raw set, not just changeovers)
-  const downtimeResult = ingestDowntime(csvText, fileName)
+  // Upsert the same rows into downtime_events (full set; classification-agnostic).
+  const downtimeResult = ingestDowntime(rows, fileName)
 
-  // Full audit summary so uploads surface exactly what happened — never silent.
-  const diagnostics = summarizeIssues(csvText)
+  // Audit summary (tags / plants / machines / date coverage) merged with the
+  // insert/update/unchanged + reclassification counts from the upsert above.
+  const summary = summarizeIssues(csvText)
+  const issuesDiagnostics = { ...summary, inserted, updated, unchanged, changeoversAdded, changeoversRemoved }
 
-  return { rowsAdded, duplicatesSkipped, total: events.length, downtime: downtimeResult, issuesDiagnostics: diagnostics }
+  return {
+    rowsAdded: inserted, rowsUpdated: updated, rowsUnchanged: unchanged, duplicatesSkipped: unchanged,
+    changeoversAdded, changeoversRemoved, total: rows.length,
+    downtime: downtimeResult, issuesDiagnostics,
+  }
 }
 
-function ingestDowntime(csvText: string, fileName: string) {
-  const events = parseDowntimeCSV(csvText)
-  let rowsAdded = 0
-  let duplicatesSkipped = 0
+// Upsert pre-parsed rows into downtime_events using the same stable key.
+function ingestDowntime(rows: ParsedIssueRow[], fileName: string) {
+  const src = hashFileName(fileName)
+  let inserted = 0, updated = 0, unchanged = 0
 
   db.transaction(() => {
-    for (const e of events) {
+    for (const e of rows) {
       const hash = rowHash(`${e.start_dt.toISOString()}|${e.device}`)
-      const r = stmts.insertDowntime.run({
+      const params = {
         row_hash: hash,
         start_dt: e.start_dt.toISOString(),
         end_dt: e.end_dt.toISOString(),
@@ -487,18 +570,41 @@ function ingestDowntime(csvText: string, fileName: string) {
         is_tagged: e.is_tagged ? 1 : 0,
         is_planned: e.is_planned ? 1 : 0,
         comments: e.comments,
-      })
-      r.changes > 0 ? rowsAdded++ : duplicatesSkipped++
+        source_file: src,
+      }
+      const existing = stmts.selectDowntime.get({ row_hash: hash }) as Record<string, unknown> | undefined
+      if (!existing) {
+        stmts.insertDowntime.run(params)
+        inserted++
+      } else {
+        const changed =
+          existing.end_dt !== params.end_dt ||
+          existing.duration !== params.duration ||
+          existing.plant !== params.plant ||
+          (existing.status ?? '') !== params.status ||
+          existing.calendar_date !== params.calendar_date ||
+          existing.week_start !== params.week_start ||
+          existing.shift !== params.shift ||
+          (existing.tags ?? '') !== params.tags ||
+          (existing.is_tagged === 1 ? 1 : 0) !== params.is_tagged ||
+          (existing.is_planned === 1 ? 1 : 0) !== params.is_planned ||
+          (existing.comments ?? '') !== params.comments
+        if (changed) {
+          stmts.updateDowntime.run(params)
+          updated++
+        } else {
+          unchanged++
+        }
+      }
     }
   })()
 
   stmts.logIngestion.run({
-    file_name: hashFileName(fileName),
-    table_name: 'downtime_events',
-    rows_added: rowsAdded,
-    duplicates_skipped: duplicatesSkipped,
+    file_name: src, table_name: 'downtime_events',
+    rows_added: inserted, duplicates_skipped: unchanged,
+    rows_updated: updated, rows_unchanged: unchanged,
   })
-  return { rowsAdded, duplicatesSkipped, total: events.length }
+  return { rowsAdded: inserted, rowsUpdated: updated, rowsUnchanged: unchanged, duplicatesSkipped: unchanged, total: rows.length }
 }
 
 function ingestOEE(csvText: string, fileName: string) {
@@ -529,6 +635,8 @@ function ingestOEE(csvText: string, fileName: string) {
     table_name: 'oee_data',
     rows_added: rowsAdded,
     duplicates_skipped: duplicatesSkipped,
+    rows_updated: 0,
+    rows_unchanged: duplicatesSkipped,
   })
   return { rowsAdded, duplicatesSkipped, total: records.length, diagnostics }
 }
@@ -556,6 +664,8 @@ function ingestEnergy(
     table_name: table,
     rows_added: rowsAdded,
     duplicates_skipped: duplicatesSkipped,
+    rows_updated: 0,
+    rows_unchanged: duplicatesSkipped,
   })
   return { rowsAdded, duplicatesSkipped, total: rows.length }
 }
@@ -1011,8 +1121,8 @@ app.get('/api/data/runtime', (_req, res) => {
 // the upload get the original name back in the upload response).
 app.get('/api/data/ingestion-log', (_req, res) => {
   const rows = db.prepare(
-    'SELECT id, file_name, table_name, rows_added, duplicates_skipped, ingested_at FROM ingestion_log ORDER BY ingested_at DESC LIMIT 200'
-  ).all() as { id: number; file_name: string; table_name: string; rows_added: number; duplicates_skipped: number; ingested_at: string }[]
+    'SELECT id, file_name, table_name, rows_added, duplicates_skipped, rows_updated, rows_unchanged, ingested_at FROM ingestion_log ORDER BY ingested_at DESC LIMIT 200'
+  ).all() as { id: number; file_name: string; table_name: string; rows_added: number; duplicates_skipped: number; rows_updated: number; rows_unchanged: number; ingested_at: string }[]
   // Also return dataset date ranges for the inventory section
   const ranges = {
     issues: db.prepare('SELECT MIN(calendar_date) as min, MAX(calendar_date) as max, COUNT(*) as n FROM issues WHERE is_changeover = 1').get() as { min: string | null; max: string | null; n: number },

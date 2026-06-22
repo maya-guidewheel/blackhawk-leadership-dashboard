@@ -24,6 +24,8 @@ interface IngestionEntry {
   table_name: string
   rows_added: number
   duplicates_skipped: number
+  rows_updated?: number
+  rows_unchanged?: number
   ingested_at: string
 }
 
@@ -242,6 +244,9 @@ export default function DataManagement({ dataStatus, energyRows, runtimeRecords,
           Upload History
           {log.length > 0 && <span className="ml-2 text-xs text-muted-foreground font-normal">(most recent 200)</span>}
         </h3>
+        <div className="rounded-lg px-4 py-3 mb-3 text-xs bg-btn-primary/5 border border-btn-primary/20 text-foreground">
+          Reuploading a Guidewheel Issues export <span className="font-semibold">refreshes existing issue records</span> when tags/status/details changed. Exact duplicate rows are skipped, but updated duplicate events overwrite the older dashboard record — and changeover classification is recalculated, so an event that loses its changeover tag drops out of Changeover analysis (and one that gains a valid changeover tag is added).
+        </div>
         {loading ? (
           <div className="text-sm text-muted-foreground">Loading…</div>
         ) : log.length === 0 ? (
@@ -250,25 +255,30 @@ export default function DataManagement({ dataStatus, energyRows, runtimeRecords,
           <div className="overflow-x-auto" style={{ maxHeight: 400, overflowY: 'auto' }}>
             <table className="w-full">
               <thead className="sticky top-0 bg-card z-10">
-                <tr>{['Uploaded at', 'Dataset', 'Records added', 'Duplicates skipped', 'File (hashed)'].map(h => <th key={h} className={thCls}>{h}</th>)}</tr>
+                <tr>{['Uploaded at', 'Dataset', 'Inserted', 'Updated', 'Unchanged', 'File (hashed)'].map(h => <th key={h} className={thCls}>{h}</th>)}</tr>
               </thead>
               <tbody>
-                {log.map(entry => (
-                  <tr key={entry.id}>
-                    <td className={tdCls}>{fmtDate(entry.ingested_at)}</td>
-                    <td className={tdCls}>{TABLE_LABELS[entry.table_name] ?? entry.table_name}</td>
-                    <td className={`${tdCls} ${entry.rows_added > 0 ? 'text-success font-medium' : 'text-muted-foreground'}`}>{entry.rows_added.toLocaleString()}</td>
-                    <td className={tdCls}>{entry.duplicates_skipped.toLocaleString()}</td>
-                    <td className={`${tdCls} font-mono text-xs text-muted-foreground`}>{entry.file_name}</td>
-                  </tr>
-                ))}
+                {log.map(entry => {
+                  const unchanged = entry.rows_unchanged ?? entry.duplicates_skipped
+                  const updated = entry.rows_updated ?? 0
+                  return (
+                    <tr key={entry.id}>
+                      <td className={tdCls}>{fmtDate(entry.ingested_at)}</td>
+                      <td className={tdCls}>{TABLE_LABELS[entry.table_name] ?? entry.table_name}</td>
+                      <td className={`${tdCls} ${entry.rows_added > 0 ? 'text-success font-medium' : 'text-muted-foreground'}`}>{entry.rows_added.toLocaleString()}</td>
+                      <td className={`${tdCls} ${updated > 0 ? 'text-btn-primary font-medium' : 'text-muted-foreground'}`}>{updated.toLocaleString()}</td>
+                      <td className={tdCls}>{unchanged.toLocaleString()}</td>
+                      <td className={`${tdCls} font-mono text-xs text-muted-foreground`}>{entry.file_name}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
         )}
         <p className="text-xs mt-3 text-muted-foreground">
           File names are stored as SHA-256 hashes for privacy. Original names are shown in the upload banner when you upload a file.
-          Duplicate uploads are skipped — re-uploading the same data does not double-count records.
+          <span className="font-semibold text-foreground"> Inserted</span> = brand-new events · <span className="font-semibold text-foreground">Updated</span> = existing events whose Guidewheel details changed · <span className="font-semibold text-foreground">Unchanged</span> = exact duplicates skipped. Re-uploading the same data never double-counts.
         </p>
       </div>
 

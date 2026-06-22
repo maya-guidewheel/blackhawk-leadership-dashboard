@@ -49,6 +49,10 @@ interface UploadFeedback {
   type: string
   rowsAdded: number
   duplicatesSkipped: number
+  rowsUpdated?: number
+  rowsUnchanged?: number
+  changeoversAdded?: number
+  changeoversRemoved?: number
   dataMin?: string
   dataMax?: string
   fileType?: string
@@ -75,6 +79,11 @@ interface UploadFeedback {
     tagsFound: string[]
     machinesFound: string[]
     plantsFound: string[]
+    inserted?: number
+    updated?: number
+    unchanged?: number
+    changeoversAdded?: number
+    changeoversRemoved?: number
   }
 }
 
@@ -458,7 +467,7 @@ export default function App() {
           <div className="px-4 sm:px-6 mt-3">
             <div
               className={`rounded-md border px-4 py-3 text-sm ${
-                uploadFeedback.rowsAdded > 0
+                (uploadFeedback.rowsAdded > 0 || (uploadFeedback.rowsUpdated ?? 0) > 0)
                   ? 'border-success bg-success/5 text-success'
                   : 'border-warning bg-warning/5 text-warning'
               }`}
@@ -468,11 +477,21 @@ export default function App() {
                   <span className="font-semibold">{uploadFeedback.fileName}</span>
                   {' — '}
                   <span className="font-semibold">
-                    {uploadFeedback.rowsAdded.toLocaleString()} records added
+                    {uploadFeedback.rowsAdded.toLocaleString()} inserted
                   </span>
-                  {uploadFeedback.duplicatesSkipped > 0 && (
+                  {(uploadFeedback.rowsUpdated ?? 0) > 0 && (
+                    <span className="font-semibold">
+                      , {(uploadFeedback.rowsUpdated ?? 0).toLocaleString()} updated
+                    </span>
+                  )}
+                  {(uploadFeedback.rowsUnchanged ?? uploadFeedback.duplicatesSkipped) > 0 && (
                     <span className="text-muted-foreground">
-                      , {uploadFeedback.duplicatesSkipped.toLocaleString()} duplicates skipped
+                      , {(uploadFeedback.rowsUnchanged ?? uploadFeedback.duplicatesSkipped).toLocaleString()} unchanged
+                    </span>
+                  )}
+                  {(uploadFeedback.changeoversRemoved ?? 0) + (uploadFeedback.changeoversAdded ?? 0) > 0 && (
+                    <span className="text-muted-foreground">
+                      , {((uploadFeedback.changeoversAdded ?? 0) + (uploadFeedback.changeoversRemoved ?? 0)).toLocaleString()} changeovers reclassified
                     </span>
                   )}
                   <span className="ml-2 text-xs text-muted-foreground">
@@ -487,9 +506,9 @@ export default function App() {
                   ×
                 </button>
               </div>
-              {uploadFeedback.rowsAdded === 0 && uploadFeedback.duplicatesSkipped > 0 && uploadFeedback.dataMin && (
+              {uploadFeedback.rowsAdded === 0 && (uploadFeedback.rowsUpdated ?? 0) === 0 && uploadFeedback.duplicatesSkipped > 0 && uploadFeedback.dataMin && (
                 <div className="mt-1 text-xs text-muted-foreground">
-                  Existing dataset: <span className="font-medium text-foreground">{uploadFeedback.dataMin}</span> to <span className="font-medium text-foreground">{uploadFeedback.dataMax}</span>. Data is current — no new records to add.
+                  Existing dataset: <span className="font-medium text-foreground">{uploadFeedback.dataMin}</span> to <span className="font-medium text-foreground">{uploadFeedback.dataMax}</span>. Data is current — no changed records to apply.
                 </div>
               )}
               {uploadFeedback.type === 'runtime' && uploadFeedback.runtimeDiagnostics && (
@@ -517,11 +536,17 @@ export default function App() {
                 <div className="mt-2 text-xs space-y-1 text-muted-foreground">
                   <div>
                     <span className="font-semibold text-foreground">Rows read:</span> {uploadFeedback.issuesDiagnostics.rowsRead.toLocaleString()}
-                    {' · '}<span className="font-semibold text-foreground">Changeovers:</span> {uploadFeedback.issuesDiagnostics.changeoverEvents.toLocaleString()}
-                    {' · '}<span className="font-semibold text-foreground">Excluded (non-changeover):</span> {uploadFeedback.issuesDiagnostics.excludedNonChangeover.toLocaleString()}
+                    {' · '}<span className="font-semibold text-foreground">Inserted:</span> {(uploadFeedback.issuesDiagnostics.inserted ?? uploadFeedback.rowsAdded).toLocaleString()}
+                    {' · '}<span className="font-semibold text-foreground">Updated:</span> {(uploadFeedback.issuesDiagnostics.updated ?? uploadFeedback.rowsUpdated ?? 0).toLocaleString()}
+                    {' · '}<span className="font-semibold text-foreground">Unchanged:</span> {(uploadFeedback.issuesDiagnostics.unchanged ?? uploadFeedback.rowsUnchanged ?? 0).toLocaleString()}
                     {uploadFeedback.issuesDiagnostics.skippedInvalid > 0 && (
-                      <>{' · '}<span className="font-semibold text-foreground">Skipped (invalid):</span> {uploadFeedback.issuesDiagnostics.skippedInvalid.toLocaleString()}</>
+                      <>{' · '}<span className="font-semibold text-foreground">Invalid skipped:</span> {uploadFeedback.issuesDiagnostics.skippedInvalid.toLocaleString()}</>
                     )}
+                  </div>
+                  <div>
+                    <span className="font-semibold text-foreground">Changeovers in file:</span> {uploadFeedback.issuesDiagnostics.changeoverEvents.toLocaleString()}
+                    {' · '}<span className="font-semibold text-foreground">Reclassified in:</span> {(uploadFeedback.issuesDiagnostics.changeoversAdded ?? 0).toLocaleString()}
+                    {' · '}<span className="font-semibold text-foreground">Reclassified out:</span> {(uploadFeedback.issuesDiagnostics.changeoversRemoved ?? 0).toLocaleString()}
                   </div>
                   {uploadFeedback.issuesDiagnostics.dateMin && (
                     <div><span className="font-semibold text-foreground">Date range:</span> {uploadFeedback.issuesDiagnostics.dateMin} to {uploadFeedback.issuesDiagnostics.dateMax}</div>

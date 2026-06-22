@@ -59,22 +59,44 @@ function getChangeoverType(device: string): string {
   return 'Color Change'
 }
 
-export function parseCSV(csvText: string): ColorChangeEvent[] {
+// A fully-parsed, normalized issue/event row carrying everything BOTH the
+// changeover (issues) and downtime tables need, plus the centralized changeover
+// classification. This is the single source of truth — parseCSV and
+// parseDowntimeCSV are thin views over it so classification can never drift.
+export interface ParsedIssueRow {
+  start_dt: Date
+  end_dt: Date
+  duration: number
+  device: string
+  plant: string
+  status: string
+  calendar_date: string
+  week_start: string
+  shift: string
+  tags: string
+  comments: string
+  is_tagged: boolean
+  is_planned: boolean
+  changeover_type: string
+  is_changeover: boolean
+  changeover_match_tag: string | null
+}
+
+// Parse every VALID issue row from a Guidewheel Issues export. Validity is purely
+// structural (device present, finite positive duration < 48h, end + parseable
+// timestamps) — it does NOT filter on tags. Changeover status is attached per row
+// via the centralized classifier so a row that loses its changeover tag on a
+// re-upload is still returned (now flagged is_changeover=false) and can update
+// the stored record.
+export function parseIssueRows(csvText: string): ParsedIssueRow[] {
   const result = Papa.parse<RawRow>(csvText, {
     header: true,
     skipEmptyLines: true,
     dynamicTyping: false,
   })
 
-  const events: ColorChangeEvent[] = []
-
+  const rows: ParsedIssueRow[] = []
   for (const row of result.data) {
-    // CHANGEOVER GATE: include ONLY if the raw tags contain an allowed changeover
-    // tag. Classification is purely tag-driven — never inferred from device,
-    // duration, or machine status. (Garbage in, garbage out.)
-    const classification = classifyChangeover(row.Tags)
-    if (!classification.isChangeover) continue
-
     const device = (row.Devices || '').trim()
     if (!device) continue
 
@@ -83,7 +105,7 @@ export function parseCSV(csvText: string): ColorChangeEvent[] {
     if (!durationStr || durationStr.toLowerCase() === 'ongoing') continue
 
     const duration = parseFloat(durationStr)
-    if (isNaN(duration) || duration <= 0 || duration >= 600) continue
+    if (isNaN(duration) || duration <= 0 || duration >= 2880) continue
 
     // End must be present
     const endStr = (row.End || '').trim()
@@ -93,23 +115,49 @@ export function parseCSV(csvText: string): ColorChangeEvent[] {
     const end_dt = parseTimestamp(endStr)
     if (!start_dt || !end_dt) continue
 
-    events.push({
+    const tags = (row.Tags || '').trim()
+    const classification = classifyChangeover(tags)
+
+    rows.push({
       start_dt,
       end_dt,
       duration,
       device,
       plant: getPlant(device),
-      changeover_type: getChangeoverType(device),
       status: (row.Status || '').trim(),
       calendar_date: getCalendarDate(start_dt),
       week_start: getWeekStart(start_dt),
-      tags: (row.Tags || '').trim(),
+      shift: getShift(start_dt),
+      tags,
       comments: (row.Comments || '').trim(),
-      changeover_match_tag: classification.matchedTag ?? undefined,
+      is_tagged: isEffectivelyTagged(tags),
+      is_planned: tags.toLowerCase().includes('planned'),
+      changeover_type: getChangeoverType(device),
+      is_changeover: classification.isChangeover,
+      changeover_match_tag: classification.matchedTag,
     })
   }
+  return rows
+}
 
-  return events
+// Changeover view: only rows whose tags qualify as a changeover.
+export function parseCSV(csvText: string): ColorChangeEvent[] {
+  return parseIssueRows(csvText)
+    .filter(r => r.is_changeover)
+    .map(r => ({
+      start_dt: r.start_dt,
+      end_dt: r.end_dt,
+      duration: r.duration,
+      device: r.device,
+      plant: r.plant,
+      changeover_type: r.changeover_type,
+      status: r.status,
+      calendar_date: r.calendar_date,
+      week_start: r.week_start,
+      tags: r.tags,
+      comments: r.comments,
+      changeover_match_tag: r.changeover_match_tag ?? undefined,
+    }))
 }
 
 // Build an audit summary of a Guidewheel Issues file: how many rows were read,
@@ -202,56 +250,23 @@ function getShift(dt: Date): string {
   return '3rd Shift'
 }
 
+// Downtime view: ALL valid rows (changeover status is irrelevant to downtime).
 export function parseDowntimeCSV(csvText: string): DowntimeEvent[] {
-  const result = Papa.parse<RawRow>(csvText, {
-    header: true,
-    skipEmptyLines: true,
-    dynamicTyping: false,
-  })
-
-  const events: DowntimeEvent[] = []
-
-  for (const row of result.data) {
-    const device = (row.Devices || '').trim()
-    if (!device) continue
-
-    // Skip ongoing events
-    const durationStr = (row['Duration (minutes)'] || '').trim()
-    if (!durationStr || durationStr.toLowerCase() === 'ongoing') continue
-
-    const duration = parseFloat(durationStr)
-    if (isNaN(duration) || duration <= 0 || duration >= 2880) continue
-
-    // End must be present
-    const endStr = (row.End || '').trim()
-    if (!endStr) continue
-
-    const start_dt = parseTimestamp(row.Start)
-    const end_dt = parseTimestamp(endStr)
-    if (!start_dt || !end_dt) continue
-
-    const tags = (row.Tags || '').trim()
-    const is_tagged = isEffectivelyTagged(tags)
-    const is_planned = tags.toLowerCase().includes('planned')
-
-    events.push({
-      start_dt,
-      end_dt,
-      duration,
-      device,
-      plant: getPlant(device),
-      status: (row.Status || '').trim(),
-      calendar_date: getCalendarDate(start_dt),
-      week_start: getWeekStart(start_dt),
-      shift: getShift(start_dt),
-      tags,
-      is_tagged,
-      is_planned,
-      comments: (row.Comments || '').trim(),
-    })
-  }
-
-  return events
+  return parseIssueRows(csvText).map(r => ({
+    start_dt: r.start_dt,
+    end_dt: r.end_dt,
+    duration: r.duration,
+    device: r.device,
+    plant: r.plant,
+    status: r.status,
+    calendar_date: r.calendar_date,
+    week_start: r.week_start,
+    shift: r.shift,
+    tags: r.tags,
+    is_tagged: r.is_tagged,
+    is_planned: r.is_planned,
+    comments: r.comments,
+  }))
 }
 
 // Month abbreviation → number mapping for parsing Guidewheel scheduled-time strings
