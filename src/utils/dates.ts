@@ -73,6 +73,40 @@ export function formatDateRange(min: string | null | undefined, max: string | nu
   return `${a} to ${b}`
 }
 
+// Parse a server timestamp into a Date. SQLite's datetime('now') returns UTC as
+// "YYYY-MM-DD HH:MM:SS" with NO timezone marker, which the JS Date constructor
+// would otherwise read as LOCAL time. Treat such bare strings as UTC.
+function parseServerTimestamp(s: string): Date | null {
+  if (!s) return null
+  // Already zoned (Z / ±hh:mm) or full ISO with 'T' → trust as-is.
+  if (/[zZ]$|[+-]\d{2}:?\d{2}$/.test(s) || s.includes('T')) {
+    const d = new Date(s)
+    return isValid(d) ? d : null
+  }
+  // Bare "YYYY-MM-DD HH:MM:SS" is UTC — make it explicit.
+  const d = new Date(s.replace(' ', 'T') + 'Z')
+  return isValid(d) ? d : null
+}
+
+// Format a server (UTC) timestamp in the viewer's local timezone, e.g.
+// "Jun 22, 2026, 5:09 PM GMT-3". Returns `fallback` for null/unparseable input.
+export function formatServerTimestamp(s: string | null | undefined, fallback = 'never'): string {
+  if (!s) return fallback
+  const d = parseServerTimestamp(s)
+  if (!d) return fallback
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric', year: 'numeric',
+    hour: 'numeric', minute: '2-digit', timeZoneName: 'short',
+  })
+}
+
+// Raw UTC string for tooltips, e.g. "2026-06-22 19:57 UTC".
+export function formatUtcTooltip(s: string | null | undefined): string {
+  const d = parseServerTimestamp(s ?? '')
+  if (!d) return ''
+  return d.toISOString().slice(0, 16).replace('T', ' ') + ' UTC'
+}
+
 export function getWeekStart(dt: Date): string {
   const monday = startOfWeek(dt, { weekStartsOn: 1 })
   return format(monday, 'yyyy-MM-dd')

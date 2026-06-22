@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import rateLimit from 'express-rate-limit'
 import compression from 'compression'
-import { parseEnergyCSV, parseOEECSV, parseIssueRows, summarizeIssues } from './src/data/parser'
+import { parseEnergyCSV, parseOEECSV, parseIssueRows, summarizeIssues, detectCsvDataset } from './src/data/parser'
 import type { OEEDiagnostics, ParsedIssueRow } from './src/data/parser'
 import type { ColorChangeEvent, EnergyRow, RuntimeRecord } from './src/data/types'
 import { classifyChangeover } from './src/data/changeover'
@@ -824,6 +824,26 @@ function runEnergyDateBackfill() {
 
 runEnergyDateBackfill()
 
+// ── Energy Pollution Cleanup ─────────────────────────────────────────────────
+// A prior bug routed semicolon-delimited Issues exports into the energy tables,
+// where each issue row was misread as machine=<start timestamp>, date=<end
+// timestamp>, kwh=<duration>. Those rows have a "machine" that is really a
+// timestamp — it contains a slash, colon, or whitespace, which a real machine id
+// (e.g. "2C5-01") never does. Delete ONLY those polluted rows; legitimate energy
+// data is untouched. Idempotent; safe to run every startup.
+function runEnergyPollutionCleanup() {
+  for (const table of ['energy_average', 'energy_max'] as const) {
+    const res = db.prepare(
+      `DELETE FROM ${table} WHERE machine LIKE '%/%' OR machine LIKE '%:%' OR machine LIKE '% %'`
+    ).run()
+    if (res.changes > 0) {
+      console.log(`[energy-pollution-cleanup] ${table}: removed ${res.changes} non-energy (Issues-misclassified) rows`)
+    }
+  }
+}
+
+runEnergyPollutionCleanup()
+
 // ── Express App ────────────────────────────────────────────────────────────
 const app = express()
 
@@ -1192,42 +1212,13 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
   // ── CSV branch ──
   const csvText = req.file.buffer.toString('utf-8')
 
-  // Content-first type detection to prevent filename-based misrouting.
-  const csvLines = csvText.replace(/^﻿/, '').split(/\r?\n/).filter(l => l.trim())
-  const firstHeaderLine = (csvLines[0] || '').toLowerCase()
-  const firstDataLine = csvLines.length > 1 ? csvLines[1] : ''
-  const isSemicolonDelimited = (firstDataLine.match(/;/g) || []).length >= 2
-
-  let type: 'issues' | 'energy_average' | 'energy_max' | 'oee'
-
-  // Production/OEE CSVs contain specific columns not present in energy CSVs.
-  // Check for production format FIRST — before the generic semicolon check that
-  // would otherwise misroute semicolon-delimited production exports as energy data.
-  const isProductionCsv = (
-    firstHeaderLine.includes('oee') &&
-    firstHeaderLine.includes('availability') &&
-    (firstHeaderLine.includes('from') || firstHeaderLine.includes('machine'))
-  )
-
-  if (typeHint === 'oee' || isProductionCsv) {
-    type = 'oee'
-  } else if (typeHint === 'energy_max') {
-    type = 'energy_max'
-  } else if (typeHint === 'energy_average' || typeHint === 'energy') {
-    type = 'energy_average'
-  } else if (isSemicolonDelimited || firstHeaderLine.includes('energy kwh')) {
-    type = lowerName.includes('max') ? 'energy_max' : 'energy_average'
-  } else if (firstHeaderLine.includes('oee') || (firstHeaderLine.includes('device') && firstHeaderLine.includes('production'))) {
-    type = 'oee'
-  } else if (lowerName.includes('oee') || lowerName.includes('production')) {
-    type = 'oee'
-  } else if (lowerName.includes('max')) {
-    type = 'energy_max'
-  } else if (lowerName.includes('energy') || lowerName.includes('average')) {
-    type = 'energy_average'
-  } else {
-    type = 'issues'
-  }
+  // Header-authoritative routing. Guidewheel Issues AND Energy exports are BOTH
+  // semicolon-delimited, so we must inspect column HEADERS — not the delimiter —
+  // to tell them apart. (Previously a semicolon-count heuristic misrouted Issues
+  // files to Energy.) typeHint allows a manual reprocess override.
+  const normalizedHint = typeHint === 'energy' ? 'energy_average' : typeHint
+  const detection = detectCsvDataset(csvText, fileName, normalizedHint)
+  const type = detection.type
 
   try {
     let result: Record<string, unknown>
@@ -1238,6 +1229,9 @@ app.post('/api/upload', uploadLimiter, upload.single('file'), (req: Request, res
     } else {
       result = ingestEnergy(csvText, fileName, type)
     }
+
+    // Attach routing diagnostics so the user can see WHY a dataset was chosen.
+    result = { ...result, routing: detection }
 
     // Always attach the live date range so the UI reflects the ACTUAL latest
     // loaded record (not upload metadata or filenames) — fixes "stuck through

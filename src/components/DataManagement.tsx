@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { apiFetch } from '../utils/api'
-import { normalizeDateOnly } from '../utils/dates'
+import { normalizeDateOnly, formatServerTimestamp, formatUtcTooltip } from '../utils/dates'
 import type { EnergyRow, DowntimeEvent, OEERecord, RuntimeRecord, ColorChangeEvent } from '../data/types'
 
 interface Props {
@@ -41,9 +41,9 @@ const cardCls = 'bg-card border border-border rounded-xl p-5'
 const thCls = 'text-[0.7rem] font-bold uppercase tracking-[0.06em] text-muted-foreground px-3 py-2 border-b border-border text-left whitespace-nowrap'
 const tdCls = 'px-3 py-2 text-[0.8rem] text-foreground border-b border-border'
 
+// Server timestamps are UTC; render in the viewer's local timezone (with zone label).
 function fmtDate(iso: string | null): string {
-  if (!iso) return '—'
-  return new Date(iso).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' })
+  return formatServerTimestamp(iso, '—')
 }
 
 function StatusBadge({ ok, label }: { ok: boolean; label: string }) {
@@ -112,7 +112,7 @@ export default function DataManagement({ dataStatus, energyRows, runtimeRecords,
         <h2 className="text-base font-semibold mb-1 text-foreground">Data &amp; Calculations</h2>
         <p className="text-sm text-muted-foreground">
           Transparency view for every uploaded dataset — what is loaded, what each tab needs, and whether required data is present or missing.
-          No values are fabricated. Duplicate uploads do not double-count (INSERT OR IGNORE).
+          No values are fabricated. <span className="text-foreground font-medium">Issues / Downtime re-uploads update existing events (upsert)</span> when tags/status/details change and recalculate changeover classification; exact unchanged rows are skipped. Energy, OEE and Runtime uploads insert new rows and skip exact duplicates.
         </p>
       </div>
 
@@ -127,12 +127,12 @@ export default function DataManagement({ dataStatus, energyRows, runtimeRecords,
             <tbody>
               {[
                 {
-                  name: 'Changeover / Issues', records: allEvents.length, range: issuesRange,
-                  ok: allEvents.length > 0, tabs: 'Changeover'
+                  name: 'Issues / Downtime (all events)', records: downtimeEvents.length, range: downtimeRange,
+                  ok: downtimeEvents.length > 0, tabs: 'Tagging & Downtime'
                 },
                 {
-                  name: 'Downtime / Tagging', records: downtimeEvents.length, range: downtimeRange,
-                  ok: downtimeEvents.length > 0, tabs: 'Tagging & Downtime'
+                  name: 'Changeover (tagged issues only)', records: allEvents.length, range: issuesRange,
+                  ok: allEvents.length > 0, tabs: 'Changeover'
                 },
                 {
                   name: 'Energy (kWh)', records: energyRows.length, range: energyRange,
@@ -159,6 +159,9 @@ export default function DataManagement({ dataStatus, energyRows, runtimeRecords,
             </tbody>
           </table>
         </div>
+        <p className="text-xs mt-3 text-muted-foreground">
+          Dates come from the actual loaded records, not upload metadata. <span className="font-medium text-foreground">Issues / Downtime (all events)</span> reflects every loaded issue; <span className="font-medium text-foreground">Changeover (tagged issues only)</span> reflects just events tagged Change-Color/foam/label or Change Job — so its latest date can be earlier if the most recent issues are not changeovers.
+        </p>
       </div>
 
       {/* ── Tab Requirements Matrix ────────────────────────────────────── */}
@@ -263,7 +266,7 @@ export default function DataManagement({ dataStatus, energyRows, runtimeRecords,
                   const updated = entry.rows_updated ?? 0
                   return (
                     <tr key={entry.id}>
-                      <td className={tdCls}>{fmtDate(entry.ingested_at)}</td>
+                      <td className={tdCls} title={formatUtcTooltip(entry.ingested_at)}>{fmtDate(entry.ingested_at)}</td>
                       <td className={tdCls}>{TABLE_LABELS[entry.table_name] ?? entry.table_name}</td>
                       <td className={`${tdCls} ${entry.rows_added > 0 ? 'text-success font-medium' : 'text-muted-foreground'}`}>{entry.rows_added.toLocaleString()}</td>
                       <td className={`${tdCls} ${updated > 0 ? 'text-btn-primary font-medium' : 'text-muted-foreground'}`}>{updated.toLocaleString()}</td>
@@ -310,7 +313,7 @@ export default function DataManagement({ dataStatus, energyRows, runtimeRecords,
       <div className={cardCls}>
         <h3 className="text-sm font-semibold mb-3 text-foreground">Calculation Notes</h3>
         <div className="space-y-2 text-xs text-muted-foreground">
-          <div><span className="font-semibold text-foreground">Deduplication:</span> Every record is identified by a SHA-256 hash of its key fields. Re-uploading the same file or data never double-counts records.</div>
+          <div><span className="font-semibold text-foreground">Deduplication &amp; upsert:</span> Every record has a stable key — Issues/Downtime use sha256(event start + device); energy/OEE/runtime use their natural keys. <span className="text-foreground">Issues/Downtime re-uploads UPSERT</span>: a new event inserts, an existing event with changed tags/status/duration updates in place (changeover classification is recalculated), and an exact-match event is skipped. Other datasets insert new rows and skip exact duplicates. Re-uploading never double-counts.</div>
           <div><span className="font-semibold text-foreground">Energy vs Uptime:</span> kWh/runtime hour = daily energy ÷ daily runtime. Runtime is from the Guidewheel Trends XLSX (sum of shift hours per device per day) when loaded, otherwise estimated as 24h minus recorded downtime. No cost, pricing, or labor rates appear on this tab. Energy is read from <code>energy_average</code> table — same data as the Executive Energy tab.</div>
           <div><span className="font-semibold text-foreground">Runtime endpoint:</span> <code>/api/data/runtime</code> reads the <code>runtime_data</code> table. <strong>Energy endpoint:</strong> <code>/api/data/energy/usage</code> reads the <code>energy_average</code> table.</div>
           <div><span className="font-semibold text-foreground">Tagging compliance:</span> An event is "tagged" when its tags field is non-empty and is not a placeholder value like "No Tag", "n/a", etc. Duration-weighted compliance counts tagged minutes as a % of all downtime minutes.</div>

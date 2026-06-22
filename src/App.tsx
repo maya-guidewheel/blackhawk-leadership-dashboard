@@ -25,7 +25,7 @@ import {
   weeklyDeviceMatrix,
 } from './data/aggregations'
 import type { ColorChangeEvent, FilterState, EnergyRow, DowntimeEvent, OEERecord, RuntimeRecord } from './data/types'
-import { getCalendarDate } from './utils/dates'
+import { getCalendarDate, formatServerTimestamp } from './utils/dates'
 
 type Tab = 'changeover' | 'tagging' | 'oee' | 'energy' | 'energy-uptime' | 'data'
 
@@ -85,6 +85,13 @@ interface UploadFeedback {
     changeoversAdded?: number
     changeoversRemoved?: number
   }
+  routing?: {
+    type: string
+    filenameSignal: string
+    headerSignal: string
+    winningParser: string
+    rejected: string[]
+  }
 }
 
 function getDefaultFilters(): FilterState {
@@ -100,14 +107,9 @@ function getDefaultFilters(): FilterState {
   }
 }
 
+// Server timestamps are UTC; render them in the viewer's local timezone.
 function fmtTimestamp(iso: string | null): string {
-  if (!iso) return 'never'
-  const d = new Date(iso)
-  return (
-    d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) +
-    ' ' +
-    d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
-  )
+  return formatServerTimestamp(iso, 'never')
 }
 
 const TABS: { id: Tab; label: string; badge?: string }[] = [
@@ -134,6 +136,7 @@ export default function App() {
   const [dataStatus, setDataStatus] = useState<DataStatus | null>(null)
   const [uploadFeedback, setUploadFeedback] = useState<UploadFeedback | null>(null)
   const [uploading, setUploading] = useState(false)
+  const [uploadType, setUploadType] = useState('auto')
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   // ── Load all data from API ─────────────────────────────────────────────────
@@ -329,6 +332,8 @@ export default function App() {
 
     const formData = new FormData()
     formData.append('file', file)
+    // Manual override for recovery from a wrong auto-detect (otherwise auto-routed).
+    if (uploadType !== 'auto') formData.append('type', uploadType)
 
     try {
       const res = await apiFetch('/api/upload', { method: 'POST', body: formData })
@@ -347,7 +352,7 @@ export default function App() {
       setUploading(false)
       if (fileInputRef.current) fileInputRef.current.value = ''
     }
-  }, [refreshIssues, refreshEnergy, refreshEnergyUsage, refreshRuntime, refreshStatus])
+  }, [uploadType, refreshIssues, refreshEnergy, refreshEnergyUsage, refreshRuntime, refreshStatus])
 
   // ── Derived data ───────────────────────────────────────────────────────────
   const filtered = useMemo(() => allEvents.filter(e => {
@@ -416,6 +421,19 @@ export default function App() {
                       {lastUpdatedText}
                     </span>
                   )}
+                  {/* Dataset override — leave on Auto-detect normally; force a type to
+                      recover from a wrong guess (e.g. re-upload an Issues file as Issues). */}
+                  <select
+                    value={uploadType}
+                    onChange={e => setUploadType(e.target.value)}
+                    title="Dataset type — Auto-detect from headers, or force a type to recover from a wrong guess"
+                    className="text-xs rounded-md bg-background border border-border text-foreground px-2 py-1.5"
+                  >
+                    <option value="auto">Auto-detect</option>
+                    <option value="issues">Force: Issues / Downtime</option>
+                    <option value="energy_average">Force: Energy (kWh)</option>
+                    <option value="oee">Force: OEE / Production</option>
+                  </select>
                   <label className="inline-flex items-center gap-2 cursor-pointer rounded-md bg-btn-primary text-btn-primary-foreground hover:bg-btn-primary-accent px-3.5 py-1.5 text-sm font-medium transition-colors" title="Supported files: CSV, XLSX">
                     {uploading ? 'Uploading…' : 'Upload CSV / XLSX'}
                     <input
@@ -506,6 +524,27 @@ export default function App() {
                   ×
                 </button>
               </div>
+              {/* Routing diagnostics — explains WHY this dataset/parser was chosen */}
+              {uploadFeedback.routing && (
+                <div className="mt-2 text-xs text-muted-foreground border-t border-border/50 pt-2">
+                  <div>
+                    <span className="font-semibold text-foreground">Routed to:</span> {uploadFeedback.routing.winningParser}
+                  </div>
+                  <div>
+                    <span className="font-semibold text-foreground">Header signal:</span> {uploadFeedback.routing.headerSignal}
+                    {' · '}<span className="font-semibold text-foreground">Filename signal:</span> {uploadFeedback.routing.filenameSignal}
+                  </div>
+                  {uploadFeedback.routing.rejected.length > 0 && (
+                    <div><span className="font-semibold text-foreground">Rejected:</span> {uploadFeedback.routing.rejected.join(' · ')}</div>
+                  )}
+                  {/* Misclassification guard: filename says Issues but routed to Energy */}
+                  {uploadFeedback.routing.filenameSignal === 'issues' && uploadFeedback.type.startsWith('energy') && (
+                    <div className="mt-1 rounded px-2 py-1 bg-danger/10 text-danger font-medium">
+                      ⚠ This file looks like an Issues export but was routed to Energy. Re-upload and choose “Issues” if this is wrong.
+                    </div>
+                  )}
+                </div>
+              )}
               {uploadFeedback.rowsAdded === 0 && (uploadFeedback.rowsUpdated ?? 0) === 0 && uploadFeedback.duplicatesSkipped > 0 && uploadFeedback.dataMin && (
                 <div className="mt-1 text-xs text-muted-foreground">
                   Existing dataset: <span className="font-medium text-foreground">{uploadFeedback.dataMin}</span> to <span className="font-medium text-foreground">{uploadFeedback.dataMax}</span>. Data is current — no changed records to apply.

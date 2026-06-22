@@ -25,6 +25,96 @@ export interface IssuesDiagnostics {
   plantsFound: string[]
 }
 
+export type DatasetType = 'issues' | 'energy_average' | 'energy_max' | 'oee'
+
+// Transparent, header-authoritative dataset routing. Both Guidewheel Issues and
+// Energy exports are semicolon-delimited, so the delimiter alone CANNOT tell them
+// apart — routing must look at the column HEADERS. This is the fix for Issues
+// files being misrouted to Energy.
+export interface DatasetDetection {
+  type: DatasetType
+  filenameSignal: string   // what the filename suggested
+  headerSignal: string     // what the header columns proved
+  winningParser: string    // human-readable winning dataset
+  rejected: string[]       // parsers considered and why they lost
+}
+
+export function detectCsvDataset(csvText: string, fileName: string, typeHint?: string): DatasetDetection {
+  const lowerName = (fileName || '').toLowerCase()
+  const headerLine = csvText.replace(/^﻿/, '').split(/\r?\n/).find(l => l.trim()) || ''
+  const header = headerLine.toLowerCase()
+  const cols = header.split(/[;,]/).map(c => c.trim().replace(/^"|"$/g, ''))
+  const hasCol = (name: string) => cols.some(c => c === name)
+  const headerHas = (s: string) => header.includes(s)
+
+  // Header signatures (authoritative).
+  const issuesHeader =
+    headerHas('duration') &&
+    (headerHas('devices') || hasCol('device') || headerHas('device(s)')) &&
+    (headerHas('tags') || headerHas('status') || headerHas('changelog') || headerHas('alert type') || headerHas('message'))
+  const energyHeader =
+    headerHas('energy kwh') ||
+    (cols.length <= 4 && (hasCol('machine') || hasCol('device')) && hasCol('date') && (headerHas('kwh') || headerHas('energy')))
+  const oeeHeader = headerHas('oee') && (headerHas('availability') || headerHas('performance'))
+
+  // Filename signal (advisory).
+  let filenameSignal = 'none'
+  if (lowerName.includes('issue') || lowerName.includes('downtime')) filenameSignal = 'issues'
+  else if (lowerName.includes('trends')) filenameSignal = 'runtime'
+  else if (lowerName.includes('production') || lowerName.includes('oee')) filenameSignal = 'oee'
+  else if (lowerName.includes('energy') || lowerName.includes('kwh')) filenameSignal = 'energy'
+
+  // Manual override (reprocess feature) always wins.
+  if (typeHint && ['issues', 'energy_average', 'energy_max', 'oee'].includes(typeHint)) {
+    return {
+      type: typeHint as DatasetType,
+      filenameSignal,
+      headerSignal: 'manual override',
+      winningParser: `Manual override → ${typeHint}`,
+      rejected: [],
+    }
+  }
+
+  const rejected: string[] = []
+  let type: DatasetType
+  let headerSignal: string
+  let winningParser: string
+
+  // Priority: OEE > Issues > Energy. NEVER silently default to Energy.
+  if (oeeHeader) {
+    type = 'oee'
+    headerSignal = 'headers include OEE + Availability/Performance'
+    winningParser = 'OEE / Production'
+  } else if (issuesHeader) {
+    type = 'issues'
+    headerSignal = 'headers include Start/End, Duration, Devices, Tags/Status'
+    winningParser = 'Issues / Downtime / Changeover'
+    if (energyHeader) rejected.push('Energy (kWh): rejected — header has Issues columns, not "Machine;Date;Energy kWh"')
+  } else if (energyHeader) {
+    type = lowerName.includes('max') ? 'energy_max' : 'energy_average'
+    headerSignal = 'headers match "Machine;Date;Energy kWh"'
+    winningParser = `Energy (kWh)${type === 'energy_max' ? ' — Max Power' : ''}`
+  } else {
+    // Header inconclusive → fall back to the filename, but NEVER to Energy.
+    if (filenameSignal === 'issues') {
+      type = 'issues'; headerSignal = 'header inconclusive; filename indicates Issues'
+      winningParser = 'Issues / Downtime / Changeover (by filename)'
+    } else if (filenameSignal === 'oee') {
+      type = 'oee'; headerSignal = 'header inconclusive; filename indicates OEE/Production'
+      winningParser = 'OEE / Production (by filename)'
+    } else if (filenameSignal === 'energy') {
+      type = lowerName.includes('max') ? 'energy_max' : 'energy_average'
+      headerSignal = 'header inconclusive; filename indicates Energy'
+      winningParser = 'Energy (kWh) (by filename)'
+    } else {
+      type = 'issues'; headerSignal = 'header + filename inconclusive; defaulting to Issues (safe — never Energy)'
+      winningParser = 'Issues / Downtime / Changeover (safe default)'
+    }
+  }
+
+  return { type, filenameSignal, headerSignal, winningParser, rejected }
+}
+
 // Tag values that are semantically equivalent to "no tag" — these should NOT
 // be counted as real tags for compliance purposes.
 const UNTAGGED_PLACEHOLDERS = new Set([
@@ -237,7 +327,11 @@ export function parseEnergyCSV(csvText: string): EnergyRow[] {
     // formats and rejects time-only fractions (e.g. "0.2633") so they never get
     // stored and later rendered as a decimal "date".
     const date = normalizeDateOnly(rawDate)
-    if (!machine || !date || isNaN(kWh)) continue
+    // Guard against non-energy content (e.g. an Issues row misrouted here): a real
+    // machine id never contains whitespace, slashes, or colons. A timestamp-like
+    // "machine" such as "2026/05/22 09:14" is rejected so energy data can't be
+    // polluted even if routing is wrong.
+    if (!machine || /[\s/:]/.test(machine) || !date || isNaN(kWh)) continue
     rows.push({ machine, date, kWh })
   }
   return rows
