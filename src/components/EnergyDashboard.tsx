@@ -4,7 +4,7 @@ import {
   ResponsiveContainer, Cell, Legend, LabelList,
 } from 'recharts'
 import type { EnergyRow, EnergyRates, DeviceSummary, DowntimeEvent } from '../data/types'
-import { computeEnergyByMachine, computeEnergyByPlant, getPlantForMachine } from '../data/energyAggregations'
+import { computeEnergyByMachine, computeEnergyByPlant, getPlantForMachine, idleShareOfActiveTime } from '../data/energyAggregations'
 import { axisTick, tooltipStyle, tooltipCursorFill, gridStroke, chartColor } from '../utils/chartTheme'
 import { apiFetch } from '../utils/api'
 import { normalizeDateOnly, formatServerTimestamp, QUICK_RANGES, quickRange, type QuickRangeKey } from '../utils/dates'
@@ -178,6 +178,29 @@ function IdleProductiveTooltip({ active, payload, dateRangeLabel }: {
       <div>Productive: {fmtCostFull(d.Productive)} ({d.productiveKWh.toLocaleString()} kWh) · <span className="font-semibold">{d.productivePct.toFixed(0)}%</span></div>
       <div>Idle: {fmtCostFull(d.Idle)} ({d.idleKWh.toLocaleString()} kWh) · <span className="font-semibold">{d.idlePct.toFixed(0)}%</span></div>
       <div className="mt-1 opacity-70">Estimated energy cost · {dateRangeLabel}</div>
+    </div>
+  )
+}
+
+// Rich tooltip for the Idle Waste chart — machine state breakdown + the
+// active-time idle % (the table's primary metric), plus a schedule-data note.
+function IdleWasteTooltip({ active, payload, dateRangeLabel }: {
+  active?: boolean
+  payload?: { payload: { machine: string; plant: string; idleKWh: number; 'Idle Cost': number; idleDays: number; activeDays: number; offlineDays: number; idlePctActive: number | null; allIdle: boolean } }[]
+  dateRangeLabel: string
+}) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  const pctText = d.idlePctActive === null ? 'N/A (no active time)' : `${d.idlePctActive.toFixed(1)}%`
+  return (
+    <div style={tooltipStyle} className="text-xs">
+      <div className="font-semibold mb-1">{d.machine} · {d.plant}</div>
+      <div className="opacity-70 mb-1">{dateRangeLabel}</div>
+      <div>Idle days: {d.idleDays} · Productive days: {d.activeDays} · Offline days: {d.offlineDays}</div>
+      <div>Idle: {d.idleKWh.toLocaleString()} kWh · {fmtCostFull(d['Idle Cost'])} est.</div>
+      <div className="mt-0.5">Idle % of active time: <span className="font-semibold">{pctText}</span></div>
+      {d.allIdle && <div className="text-warning mt-0.5">100% idle — no productive runtime found in range</div>}
+      <div className="mt-1 opacity-70">Scheduled-time idle % unavailable (schedule data not loaded)</div>
     </div>
   )
 }
@@ -367,11 +390,20 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
     plant: m.plant,
   }))
 
-  const idleChartData = top10Idle.map(m => ({
-    machine: m.machine,
-    'Idle Cost': parseFloat(m.idleCost.toFixed(2)),
-    plant: m.plant,
-  }))
+  const idleChartData = top10Idle.map(m => {
+    const share = idleShareOfActiveTime(m)
+    return {
+      machine: m.machine,
+      'Idle Cost': parseFloat(m.idleCost.toFixed(2)),
+      plant: m.plant,
+      idleKWh: Math.round(m.idleKWh),
+      idleDays: m.idleDays,
+      activeDays: m.activeDays,
+      offlineDays: m.offlineDays,
+      idlePctActive: share.pct,
+      allIdle: share.allIdle,
+    }
+  })
 
   // Idle vs productive stacked breakdown (top 20 by cost), with % split per machine
   const breakdownChartData = machineSummaries
@@ -1034,8 +1066,8 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
                     width={80}
                   />
                   <Tooltip
-                    formatter={(v: number) => [fmtCostFull(v), 'Idle Cost']}
-                    contentStyle={tooltipStyle}
+                    content={<IdleWasteTooltip dateRangeLabel={`${fmtDateShort(dateFrom)} – ${fmtDateShort(dateTo)}`} />}
+                    cursor={{ fill: tooltipCursorFill }}
                   />
                   <Bar dataKey="Idle Cost" fill={DANGER} radius={[0, 4, 4, 0]} />
                 </BarChart>
@@ -1058,7 +1090,7 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
                     <th className="text-right">Idle kWh</th>
                     <th className="text-right">Idle Cost</th>
                     <th className="text-right" title="Number of days this machine drew idle-level power (at least one idle period). Not 24-hour idle blocks.">Idle Days ⓘ</th>
-                    <th className="text-right" title="This machine's idle energy (kWh) as a share of its total energy in the selected range.">% of Total ⓘ</th>
+                    <th className="text-right" title="Idle time divided by idle time + productive runtime for this machine in the selected date range (measured in machine-days). Offline time is excluded.">Idle % of Active Time ⓘ</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1068,7 +1100,9 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
                         No idle waste at current threshold
                       </td>
                     </tr>
-                  ) : top10Idle.map((m, idx) => (
+                  ) : top10Idle.map((m, idx) => {
+                    const share = idleShareOfActiveTime(m)
+                    return (
                     <tr key={m.machine}>
                       <td>
                         <span className={`font-semibold ${idx < 3 ? 'text-danger' : ''}`}>
@@ -1082,22 +1116,31 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
                       </td>
                       <td className="text-right">{m.idleDays}</td>
                       <td className="text-right">
-                        {m.totalKWh > 0
-                          ? `${((m.idleKWh / m.totalKWh) * 100).toFixed(1)}%`
-                          : '—'}
+                        {share.pct === null ? (
+                          <span className="text-muted-foreground" title="No idle or productive days in range — runtime data needed to compute active time.">N/A</span>
+                        ) : share.allIdle ? (
+                          <span className="text-danger" title="100% idle because no productive runtime was found for this machine in the selected period.">
+                            100% ⚠
+                          </span>
+                        ) : (
+                          `${share.pct.toFixed(1)}%`
+                        )}
                       </td>
                     </tr>
-                  ))}
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
           </div>
         </div>
         <p className="text-xs mt-3 text-muted-foreground">
-          <span className="font-semibold text-foreground">Methodology:</span> Idle days = days the machine drew idle-level power
-          ({NOISE_FLOOR_KWH}–{idleThreshold} kWh/day; at least one idle period), not 24-hour idle blocks.
-          % of total = the machine's idle energy (kWh) as a share of its total energy in the selected range.
-          Costs are estimated from the editable per-plant energy rates above.
+          <span className="font-semibold text-foreground">Methodology:</span> Idle Days = days with at least one idle period
+          ({NOISE_FLOOR_KWH}–{idleThreshold} kWh/day), not 24-hour idle blocks.
+          Idle % of Active Time = idle time ÷ (idle time + productive runtime) for the selected range, measured in machine-days
+          (productive = ≥ {idleThreshold} kWh/day). Offline time (≤ {NOISE_FLOOR_KWH} kWh/day) is excluded, so a machine reads 100%
+          only when it had idle time and zero productive runtime in range. Idle kWh and Idle Cost are unchanged;
+          costs are estimated from the editable per-plant energy rates above. Scheduled-time idle % is not shown because schedule data is not loaded.
         </p>
       </section>
 

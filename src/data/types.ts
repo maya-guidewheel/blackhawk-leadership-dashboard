@@ -95,8 +95,9 @@ export interface EnergyMachineSummary {
   idleKWh: number
   totalCost: number
   idleCost: number
-  activeDays: number
-  idleDays: number
+  activeDays: number   // days the machine was productive/online (kWh ≥ idle threshold)
+  idleDays: number     // days the machine drew idle-level power (noise < kWh < threshold)
+  offlineDays: number  // days the machine was effectively off (kWh ≤ noise floor)
   avgDailyKWh: number
 }
 

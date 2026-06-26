@@ -31,6 +31,23 @@ export const MACHINE_TYPE_LABELS: Record<'M' | 'K' | 'L', string> = {
 
 const NOISE_FLOOR_KWH = 1
 
+export interface IdleActiveShare {
+  pct: number | null   // idle time as a share of active (non-offline) time; null if no active time
+  allIdle: boolean     // true when there was idle time but ZERO productive runtime (legit 100%)
+}
+
+// Idle % of Active Time = idle time / (idle time + productive runtime), measured
+// in machine-days from the energy state classification. Offline days are EXCLUDED
+// from the denominator. Returns pct=null when the machine had neither idle nor
+// productive days in range (only offline / no data) — caller shows "N/A".
+export function idleShareOfActiveTime(m: { idleDays: number; activeDays: number }): IdleActiveShare {
+  const denom = m.idleDays + m.activeDays
+  return {
+    pct: denom > 0 ? (m.idleDays / denom) * 100 : null,
+    allIdle: m.activeDays === 0 && m.idleDays > 0,
+  }
+}
+
 export function computeEnergyByMachine(
   rows: EnergyRow[],
   rates: EnergyRates,
@@ -52,7 +69,12 @@ export function computeEnergyByMachine(
     let idleKWh = 0
     let activeDays = 0
     let idleDays = 0
+    let offlineDays = 0
 
+    // Day-level state classification (same thresholds as Energy vs Uptime):
+    //   productive/online  → kWh ≥ idle threshold
+    //   idle               → noise floor < kWh < idle threshold
+    //   offline/off        → kWh ≤ noise floor
     for (const row of machineRows) {
       if (row.kWh >= idleThresholdKWh) {
         productionKWh += row.kWh
@@ -60,6 +82,8 @@ export function computeEnergyByMachine(
       } else if (row.kWh > NOISE_FLOOR_KWH) {
         idleKWh += row.kWh
         idleDays++
+      } else {
+        offlineDays++
       }
     }
 
@@ -74,6 +98,7 @@ export function computeEnergyByMachine(
       idleCost: idleKWh * rate,
       activeDays,
       idleDays,
+      offlineDays,
       avgDailyKWh: machineRows.length > 0 ? totalKWh / machineRows.length : 0,
     })
   }
