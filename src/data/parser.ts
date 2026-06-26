@@ -502,6 +502,8 @@ function parseProductionRows(rows: Record<string, string>[], sampleIssues: strin
       performance: parseOEEValue(perfStr),
       quality: parseOEEValue(qualStr),
       session_key,
+      batch: batch || undefined,
+      product: product || undefined,
     })
   }
   return records

@@ -17,6 +17,8 @@ import OEETrends from './components/OEETrends'
 import EnergyUptimeDashboard from './components/EnergyUptimeDashboard'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import DataManagement from './components/DataManagement'
+import ManagerCallouts from './components/ManagerCallouts'
+import JobColorChangeRatio from './components/JobColorChangeRatio'
 import {
   overallStats,
   plantSummaries,
@@ -27,7 +29,7 @@ import {
 import type { ColorChangeEvent, FilterState, EnergyRow, DowntimeEvent, OEERecord, RuntimeRecord } from './data/types'
 import { getCalendarDate, formatServerTimestamp } from './utils/dates'
 
-type Tab = 'changeover' | 'tagging' | 'oee' | 'energy' | 'energy-uptime' | 'data'
+type Tab = 'changeover' | 'tagging' | 'oee' | 'energy' | 'energy-uptime' | 'data' | 'callouts'
 
 interface DataStatus {
   issues: { count: number; lastUpdated: string | null }
@@ -119,6 +121,7 @@ const TABS: { id: Tab; label: string; badge?: string }[] = [
   { id: 'energy-uptime', label: 'Energy vs Uptime' },
   { id: 'energy', label: 'Energy & Cost', badge: 'Executive' },
   { id: 'data', label: 'Data & Calculations' },
+  { id: 'callouts', label: 'Manager Callouts' },
 ]
 
 export default function App() {
@@ -674,6 +677,12 @@ export default function App() {
                         deviceData={deviceData}
                         heatmapData={heatmapData}
                       />
+                      {/* Job-to-Color-Change Ratio — bottom of Changeover tab only */}
+                      <JobColorChangeRatio
+                        changeoverEvents={filtered}
+                        oeeRecords={oeeRecords}
+                        filters={filters}
+                      />
                     </>
                   ) : (
                     <div className="text-center py-20 text-muted-foreground">
@@ -724,13 +733,28 @@ export default function App() {
               {activeTab === 'energy' && (
                 <EnergyGate onAuth={loadEnergy}>
                   {avgEnergyRows.length > 0 ? (
-                    <EnergyDashboard avgRows={avgEnergyRows} deviceData={deviceData} />
+                    <EnergyDashboard
+                      avgRows={avgEnergyRows}
+                      deviceData={deviceData}
+                      downtimeEvents={downtimeEvents}
+                      lastUpdated={dataStatus?.energy_average.lastUpdated ?? null}
+                    />
                   ) : (
                     <div className="text-center py-20 text-muted-foreground">
                       No energy data available. Upload an energy CSV.
                     </div>
                   )}
                 </EnergyGate>
+              )}
+
+              {/* ── Manager Callouts Tab ──────────────────────────────────── */}
+              {activeTab === 'callouts' && (
+                <ManagerCallouts
+                  changeoverEvents={allEvents}
+                  downtimeEvents={downtimeEvents}
+                  runtimeRecords={runtimeRecords}
+                  oeeRecords={oeeRecords}
+                />
               )}
             </>
           )}

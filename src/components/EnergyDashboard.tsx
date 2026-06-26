@@ -1,16 +1,20 @@
 import { useState, useMemo, useEffect, useCallback } from 'react'
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
-  ResponsiveContainer, Cell, Legend,
+  ResponsiveContainer, Cell, Legend, LabelList,
 } from 'recharts'
-import type { EnergyRow, EnergyRates, DeviceSummary } from '../data/types'
+import type { EnergyRow, EnergyRates, DeviceSummary, DowntimeEvent } from '../data/types'
 import { computeEnergyByMachine, computeEnergyByPlant, getPlantForMachine } from '../data/energyAggregations'
 import { axisTick, tooltipStyle, tooltipCursorFill, gridStroke, chartColor } from '../utils/chartTheme'
 import { apiFetch } from '../utils/api'
+import { normalizeDateOnly, formatServerTimestamp, QUICK_RANGES, quickRange, type QuickRangeKey } from '../utils/dates'
+import IdleOfflineReasonMapping from './IdleOfflineReasonMapping'
 
 interface Props {
   avgRows: EnergyRow[]
   deviceData: DeviceSummary[]
+  downtimeEvents?: DowntimeEvent[]
+  lastUpdated?: string | null
 }
 
 const DEFAULT_RATES: EnergyRates = { Sparks: 0.09, Addison: 0.10, Mayflower: 0.08 }
@@ -159,9 +163,28 @@ function FilterContext({
   )
 }
 
+// Rich tooltip for the Idle vs Productive chart — shows machine, plant,
+// productive/idle cost & kWh, and the % split, plus the active date range.
+function IdleProductiveTooltip({ active, payload, dateRangeLabel }: {
+  active?: boolean
+  payload?: { payload: { machine: string; plant: string; Productive: number; Idle: number; productivePct: number; idlePct: number; productiveKWh: number; idleKWh: number } }[]
+  dateRangeLabel: string
+}) {
+  if (!active || !payload?.length) return null
+  const d = payload[0].payload
+  return (
+    <div style={tooltipStyle} className="text-xs">
+      <div className="font-semibold mb-1">{d.machine} · {d.plant}</div>
+      <div>Productive: {fmtCostFull(d.Productive)} ({d.productiveKWh.toLocaleString()} kWh) · <span className="font-semibold">{d.productivePct.toFixed(0)}%</span></div>
+      <div>Idle: {fmtCostFull(d.Idle)} ({d.idleKWh.toLocaleString()} kWh) · <span className="font-semibold">{d.idlePct.toFixed(0)}%</span></div>
+      <div className="mt-1 opacity-70">Estimated energy cost · {dateRangeLabel}</div>
+    </div>
+  )
+}
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export default function EnergyDashboard({ avgRows, deviceData }: Props) {
+export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = [], lastUpdated = null }: Props) {
   const [rates, setRates] = useState<EnergyRates>(DEFAULT_RATES)
   const [idleThreshold, setIdleThreshold] = useState(DEFAULT_IDLE_THRESHOLD)
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
@@ -199,22 +222,22 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
     setShowSaveConfirm(false)
   }, [rates, idleThreshold])
 
-  // Compute actual data date range once from loaded rows
-  const { dataMinDate, dataMaxDate } = useMemo(() => {
-    const sorted = avgRows
-      .map(r => r.date)
-      .filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d))
-      .sort()
-    return { dataMinDate: sorted[0] ?? '', dataMaxDate: sorted[sorted.length - 1] ?? '' }
-  }, [avgRows])
+  // Compute actual data date range from loaded rows. normalizeDateOnly rejects
+  // Excel-epoch garbage (e.g. "1899-12-31") so the range can never start at 1899.
+  const validDates = useMemo(
+    () => avgRows.map(r => normalizeDateOnly(r.date)).filter((d): d is string => !!d).sort(),
+    [avgRows]
+  )
+  const dataMinDate = validDates[0] ?? ''
+  const dataMaxDate = validDates[validDates.length - 1] ?? ''
 
-  // Filter state — initialize from actual data range via lazy initializers
+  // Filter state — initialize to the full VALID data range (never 1899).
   const [dateFrom, setDateFrom] = useState(() => {
-    const sorted = avgRows.map(r => r.date).filter(Boolean).sort()
+    const sorted = avgRows.map(r => normalizeDateOnly(r.date)).filter((d): d is string => !!d).sort()
     return sorted[0] ?? ''
   })
   const [dateTo, setDateTo] = useState(() => {
-    const sorted = avgRows.map(r => r.date).filter(Boolean).sort()
+    const sorted = avgRows.map(r => normalizeDateOnly(r.date)).filter((d): d is string => !!d).sort()
     return sorted[sorted.length - 1] ?? ''
   })
   const [plantFilter, setPlantFilter] = useState('All')
@@ -317,6 +340,12 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
     setDateTo(dataMaxDate)
   }
 
+  function applyQuickRange(key: QuickRangeKey) {
+    const { from, to } = quickRange(key, dataMinDate, dataMaxDate)
+    setDateFrom(from)
+    setDateTo(to)
+  }
+
   if (avgRows.length === 0) return null
 
   // Chart data preparation
@@ -344,16 +373,27 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
     plant: m.plant,
   }))
 
-  // Idle vs productive stacked breakdown (top 20 by cost)
+  // Idle vs productive stacked breakdown (top 20 by cost), with % split per machine
   const breakdownChartData = machineSummaries
     .filter(m => m.totalKWh > 0)
     .slice(0, 20)
-    .map(m => ({
-      machine: m.machine,
-      Productive: Math.round(m.totalCost - m.idleCost),
-      Idle: Math.round(m.idleCost),
-      plant: m.plant,
-    }))
+    .map(m => {
+      const productive = Math.round(m.totalCost - m.idleCost)
+      const idle = Math.round(m.idleCost)
+      const total = productive + idle
+      const idlePct = total > 0 ? (idle / total) * 100 : 0
+      const productivePct = total > 0 ? (productive / total) * 100 : 0
+      return {
+        machine: m.machine,
+        Productive: productive,
+        Idle: idle,
+        plant: m.plant,
+        productivePct,
+        idlePct,
+        productiveKWh: Math.round(m.totalKWh - m.idleKWh),
+        idleKWh: Math.round(m.idleKWh),
+      }
+    })
 
   // Dynamic chart heights
   const machineChartHeight = Math.max(400, allMachineChartData.length * 26)
@@ -419,6 +459,25 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
               />
             ))}
           </div>
+        </div>
+
+        {/* Quick ranges */}
+        <div className="px-4 pt-3 flex flex-wrap items-center gap-1.5">
+          <span className="bh-metric-label mr-1">Quick range</span>
+          {QUICK_RANGES.map(q => (
+            <button
+              key={q.key}
+              onClick={() => applyQuickRange(q.key)}
+              className="text-[0.7rem] font-semibold px-2.5 py-1 rounded-md border border-border bg-card text-muted-foreground hover:bg-background-accent hover:text-foreground transition-colors"
+            >
+              {q.label}
+            </button>
+          ))}
+          {dataMinDate && (
+            <span className="text-[0.7rem] text-muted-foreground ml-auto">
+              Available data: {dataMinDate} to {dataMaxDate}
+            </span>
+          )}
         </div>
 
         {/* Filter inputs */}
@@ -495,6 +554,11 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
           <div className="text-xs mt-0.5 text-muted-foreground">
             Displaying {filteredRows.length.toLocaleString()} of {avgRows.length.toLocaleString()} energy readings
             across {machineSummaries.length} machine{machineSummaries.length !== 1 ? 's' : ''}
+          </div>
+          <div className="text-[0.7rem] mt-1 text-muted-foreground">
+            Data current through <span className="font-medium text-foreground">{fmtDateShort(dataMaxDate)}</span>
+            {lastUpdated && <> · Last sync {formatServerTimestamp(lastUpdated)}</>}
+            {' '}· Manual weekly updates until automated integration is live
           </div>
           {noDataInDateRange && (
             <div className="mt-2 text-xs font-semibold px-2.5 py-1.5 rounded bg-danger/10 text-danger">
@@ -841,14 +905,15 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
           />
           <div className="bh-card p-4">
             <p className="text-xs mb-4 text-muted-foreground">
-              Stacked view of productive (blue) vs. idle (red) energy cost per machine.
+              Stacked view of productive (blue) vs. idle (red) estimated energy cost per machine.
+              Each bar is labeled with its % productive / % idle split; hover for kWh and cost detail.
               Machines with significant idle portions represent energy recovery opportunities.
             </p>
             <ResponsiveContainer width="100%" height={breakdownChartHeight}>
               <BarChart
                 data={breakdownChartData}
                 layout="vertical"
-                margin={{ left: 20, right: 30, top: 4, bottom: 4 }}
+                margin={{ left: 20, right: 56, top: 4, bottom: 4 }}
               >
                 <CartesianGrid strokeDasharray="3 3" stroke={gridStroke} horizontal={false} />
                 <XAxis
@@ -867,13 +932,47 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                   width={80}
                 />
                 <Tooltip
-                  formatter={(v: number, name: string) => [fmtCostFull(v), name]}
-                  contentStyle={tooltipStyle}
+                  content={<IdleProductiveTooltip dateRangeLabel={`${fmtDateShort(dateFrom)} – ${fmtDateShort(dateTo)}`} />}
                   cursor={{ fill: tooltipCursorFill }}
                 />
                 <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Bar dataKey="Productive" stackId="a" fill={chartColor(0)} />
-                <Bar dataKey="Idle" stackId="a" fill={DANGER} radius={[0, 4, 4, 0]} />
+                <Bar dataKey="Productive" stackId="a" fill={chartColor(0)}>
+                  {/* % productive inside the segment when it's wide enough to be legible */}
+                  <LabelList
+                    dataKey="productivePct"
+                    position="center"
+                    content={(props: { x?: string | number; y?: string | number; width?: string | number; height?: string | number; value?: string | number }) => {
+                      const { x, y, width, height, value } = props
+                      const w = Number(width)
+                      const pct = Number(value)
+                      if (!Number.isFinite(pct) || pct <= 0 || w < 34) return null
+                      return (
+                        <text x={Number(x) + w / 2} y={Number(y) + Number(height) / 2} fill="#fff" fontSize={10} fontWeight={600} textAnchor="middle" dominantBaseline="central">
+                          {pct.toFixed(0)}%
+                        </text>
+                      )
+                    }}
+                  />
+                </Bar>
+                <Bar dataKey="Idle" stackId="a" fill={DANGER} radius={[0, 4, 4, 0]}>
+                  {/* % idle: inside if wide enough, otherwise just outside the bar end */}
+                  <LabelList
+                    dataKey="idlePct"
+                    content={(props: { x?: string | number; y?: string | number; width?: string | number; height?: string | number; value?: string | number }) => {
+                      const { x, y, width, height, value } = props
+                      const w = Number(width)
+                      const pct = Number(value)
+                      if (!Number.isFinite(pct) || pct <= 0) return null
+                      const inside = w >= 34
+                      const cx = inside ? Number(x) + w / 2 : Number(x) + w + 4
+                      return (
+                        <text x={cx} y={Number(y) + Number(height) / 2} fill={inside ? '#fff' : 'var(--color-danger)'} fontSize={10} fontWeight={600} textAnchor={inside ? 'middle' : 'start'} dominantBaseline="central">
+                          {pct.toFixed(0)}%
+                        </text>
+                      )
+                    }}
+                  />
+                </Bar>
               </BarChart>
             </ResponsiveContainer>
           </div>
@@ -958,8 +1057,8 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
                     <th>Plant</th>
                     <th className="text-right">Idle kWh</th>
                     <th className="text-right">Idle Cost</th>
-                    <th className="text-right">Idle Days</th>
-                    <th className="text-right">% of Total</th>
+                    <th className="text-right" title="Number of days this machine drew idle-level power (at least one idle period). Not 24-hour idle blocks.">Idle Days ⓘ</th>
+                    <th className="text-right" title="This machine's idle energy (kWh) as a share of its total energy in the selected range.">% of Total ⓘ</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -994,6 +1093,12 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
             </div>
           </div>
         </div>
+        <p className="text-xs mt-3 text-muted-foreground">
+          <span className="font-semibold text-foreground">Methodology:</span> Idle days = days the machine drew idle-level power
+          ({NOISE_FLOOR_KWH}–{idleThreshold} kWh/day; at least one idle period), not 24-hour idle blocks.
+          % of total = the machine's idle energy (kWh) as a share of its total energy in the selected range.
+          Costs are estimated from the editable per-plant energy rates above.
+        </p>
       </section>
 
       {/* ── F. Energy vs. Production Efficiency ── */}
@@ -1114,6 +1219,18 @@ export default function EnergyDashboard({ avgRows, deviceData }: Props) {
           </div>
         </section>
       )}
+
+      {/* ── G. Idle vs Offline Reason-Code Mapping (bottom of tab) ── */}
+      <IdleOfflineReasonMapping
+        downtimeEvents={downtimeEvents}
+        energyRows={avgRows}
+        idleThreshold={idleThreshold}
+        noiseFloor={NOISE_FLOOR_KWH}
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        plantFilter={plantFilter}
+        selectedMachineTypes={selectedMachineTypes}
+      />
 
       {/* ── Save Confirmation Dialog ── */}
       {showSaveConfirm && (

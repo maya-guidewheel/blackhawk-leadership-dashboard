@@ -134,6 +134,8 @@ export interface OEERecord {
   performance: number | null
   quality: number | null
   session_key?: string   // stable dedup key for multi-session-per-day data (production CSV)
+  batch?: string         // job/batch number from production export (if present)
+  product?: string       // product/SKU from production export (if present)
 }
 
 export interface RuntimeRecord {

@@ -151,6 +151,9 @@ for (const tbl of ['issues', 'downtime_events']) {
 // tab can show refresh behavior, not just "duplicates skipped".
 try { db.exec('ALTER TABLE ingestion_log ADD COLUMN rows_updated INTEGER NOT NULL DEFAULT 0') } catch { /* exists */ }
 try { db.exec('ALTER TABLE ingestion_log ADD COLUMN rows_unchanged INTEGER NOT NULL DEFAULT 0') } catch { /* exists */ }
+// oee_data gains batch/product (job/SKU) for the Job-to-Color-Change Ratio.
+try { db.exec('ALTER TABLE oee_data ADD COLUMN batch TEXT') } catch { /* exists */ }
+try { db.exec('ALTER TABLE oee_data ADD COLUMN product TEXT') } catch { /* exists */ }
 
 // ── Prepared Statements ────────────────────────────────────────────────────
 const stmts = {
@@ -210,9 +213,9 @@ const stmts = {
   `),
   insertOEE: db.prepare(`
     INSERT OR IGNORE INTO oee_data
-      (row_hash, machine, date, oee, availability, performance, quality)
+      (row_hash, machine, date, oee, availability, performance, quality, batch, product)
     VALUES
-      (@row_hash, @machine, @date, @oee, @availability, @performance, @quality)
+      (@row_hash, @machine, @date, @oee, @availability, @performance, @quality, @batch, @product)
   `),
   // Changeover analysis reads ONLY rows whose tags qualify as a changeover.
   // is_changeover = 1 is enforced here so misclassified historical rows (e.g. the
@@ -625,6 +628,8 @@ function ingestOEE(csvText: string, fileName: string) {
         availability: rec.availability,
         performance: rec.performance,
         quality: rec.quality,
+        batch: rec.batch ?? null,
+        product: rec.product ?? null,
       })
       r.changes > 0 ? rowsAdded++ : duplicatesSkipped++
     }
@@ -1115,6 +1120,8 @@ app.get('/api/data/oee', (_req, res) => {
     availability: r.availability,
     performance: r.performance,
     quality: r.quality,
+    batch: r.batch ?? undefined,
+    product: r.product ?? undefined,
   }))
   const stat = stmts.statsOEE.get() as { n: number; last: string | null }
   res.json({ records, total: records.length, lastUpdated: stat.last })

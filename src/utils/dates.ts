@@ -26,34 +26,55 @@ export function excelSerialToDate(serial: number): Date | null {
   return isValid(dt) ? dt : null
 }
 
+// Plausibility window for real Guidewheel data. Anything outside this is
+// treated as invalid — this is what blocks the Excel-epoch "Dec 31, 1899" bug
+// (a stored "1899-12-31" string, or a tiny Excel serial like 1/2/100 that maps
+// to 1899–1900) from ever surfacing as a date.
+const MIN_VALID_YEAR = 2000
+const MAX_VALID_YEAR = 2100
+
+function withinPlausibleYear(yyyyMmDd: string): boolean {
+  const year = parseInt(yyyyMmDd.slice(0, 4), 10)
+  return Number.isFinite(year) && year >= MIN_VALID_YEAR && year <= MAX_VALID_YEAR
+}
+
 // Normalize any incoming date value to a strict "YYYY-MM-DD" string, or null if
 // it cannot be interpreted as a real calendar date. Handles:
 //   - ISO with optional time:  "2026-06-18", "2026-06-18T08:18", "2026-06-18 08:18"
 //   - slash format:            "2026/06/18", "2026/06/18 08:18"
 //   - Excel serial numbers:    "46191"  → a real date
 //   - time-only fractions:     "0.2633" → null (NOT a date — must never display)
+//   - Excel-epoch garbage:     "1899-12-31", serial "1"/"100" → null (implausible year)
 export function normalizeDateOnly(raw: string | number | null | undefined): string | null {
   if (raw === null || raw === undefined) return null
   const s = String(raw).trim()
   if (!s) return null
 
+  let candidate: string | null = null
+
   // Already ISO date (optionally with time) — take the date portion.
   const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/)
-  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
-
-  // Slash-separated date — take the date portion.
-  const slash = s.match(/^(\d{4})\/(\d{2})\/(\d{2})/)
-  if (slash) return `${slash[1]}-${slash[2]}-${slash[3]}`
-
-  // Pure number → Excel serial. Fractions < 1 are time-only and rejected.
-  if (/^\d+(\.\d+)?$/.test(s)) {
-    const dt = excelSerialToDate(parseFloat(s))
-    return dt ? format(dt, 'yyyy-MM-dd') : null
+  if (iso) {
+    candidate = `${iso[1]}-${iso[2]}-${iso[3]}`
+  } else {
+    // Slash-separated date — take the date portion.
+    const slash = s.match(/^(\d{4})\/(\d{2})\/(\d{2})/)
+    if (slash) {
+      candidate = `${slash[1]}-${slash[2]}-${slash[3]}`
+    } else if (/^\d+(\.\d+)?$/.test(s)) {
+      // Pure number → Excel serial. Fractions < 1 are time-only and rejected.
+      const dt = excelSerialToDate(parseFloat(s))
+      candidate = dt ? format(dt, 'yyyy-MM-dd') : null
+    } else {
+      // Last resort: let the Date parser try, but only accept a real date.
+      const dt = new Date(s)
+      candidate = isValid(dt) ? format(dt, 'yyyy-MM-dd') : null
+    }
   }
 
-  // Last resort: let the Date parser try, but only accept if it yields a real date.
-  const dt = new Date(s)
-  return isValid(dt) ? format(dt, 'yyyy-MM-dd') : null
+  // Reject implausible years (Excel epoch / corrupt serials). Real data is 2025+.
+  if (candidate && !withinPlausibleYear(candidate)) return null
+  return candidate
 }
 
 // Render a "YYYY-MM-DD" string as a human-readable date like "Jun 18, 2026".
@@ -71,6 +92,41 @@ export function formatDateRange(min: string | null | undefined, max: string | nu
   const b = formatDisplayDate(max)
   if (a === '—' && b === '—') return '—'
   return `${a} to ${b}`
+}
+
+export type QuickRangeKey = '7d' | '30d' | 'mtd' | 'qtd' | 'ytd' | 'all'
+
+export const QUICK_RANGES: { key: QuickRangeKey; label: string }[] = [
+  { key: '7d', label: 'Last 7 days' },
+  { key: '30d', label: 'Last 30 days' },
+  { key: 'mtd', label: 'Month to date' },
+  { key: 'qtd', label: 'Quarter to date' },
+  { key: 'ytd', label: 'Year to date' },
+  { key: 'all', label: 'All data' },
+]
+
+// Compute a {from,to} window for a quick-range key, clamped to the available
+// data window [dataMin, dataMax] so a picker can never select outside real data.
+// Anchored to dataMax (latest valid record), not "today", because data lags.
+export function quickRange(
+  key: QuickRangeKey,
+  dataMin: string,
+  dataMax: string,
+): { from: string; to: string } {
+  if (!dataMin || !dataMax) return { from: dataMin, to: dataMax }
+  if (key === 'all') return { from: dataMin, to: dataMax }
+
+  const anchor = new Date(dataMax + 'T00:00:00')
+  let from = new Date(anchor)
+  if (key === '7d') from.setDate(anchor.getDate() - 6)
+  else if (key === '30d') from.setDate(anchor.getDate() - 29)
+  else if (key === 'mtd') from = new Date(anchor.getFullYear(), anchor.getMonth(), 1)
+  else if (key === 'qtd') from = new Date(anchor.getFullYear(), Math.floor(anchor.getMonth() / 3) * 3, 1)
+  else if (key === 'ytd') from = new Date(anchor.getFullYear(), 0, 1)
+
+  const fromStr = format(from, 'yyyy-MM-dd')
+  // Clamp the start to the earliest available data.
+  return { from: fromStr < dataMin ? dataMin : fromStr, to: dataMax }
 }
 
 // Parse a server timestamp into a Date. SQLite's datetime('now') returns UTC as
