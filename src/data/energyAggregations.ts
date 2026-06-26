@@ -31,23 +31,6 @@ export const MACHINE_TYPE_LABELS: Record<'M' | 'K' | 'L', string> = {
 
 const NOISE_FLOOR_KWH = 1
 
-export interface IdleActiveShare {
-  pct: number | null   // idle time as a share of active (non-offline) time; null if no active time
-  allIdle: boolean     // true when there was idle time but ZERO productive runtime (legit 100%)
-}
-
-// Idle % of Active Time = idle time / (idle time + productive runtime), measured
-// in machine-days from the energy state classification. Offline days are EXCLUDED
-// from the denominator. Returns pct=null when the machine had neither idle nor
-// productive days in range (only offline / no data) — caller shows "N/A".
-export function idleShareOfActiveTime(m: { idleDays: number; activeDays: number }): IdleActiveShare {
-  const denom = m.idleDays + m.activeDays
-  return {
-    pct: denom > 0 ? (m.idleDays / denom) * 100 : null,
-    allIdle: m.activeDays === 0 && m.idleDays > 0,
-  }
-}
-
 export function computeEnergyByMachine(
   rows: EnergyRow[],
   rates: EnergyRates,
