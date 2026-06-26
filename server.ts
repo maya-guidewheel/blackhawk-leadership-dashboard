@@ -154,6 +154,11 @@ try { db.exec('ALTER TABLE ingestion_log ADD COLUMN rows_unchanged INTEGER NOT N
 // oee_data gains batch/product (job/SKU) for the Job-to-Color-Change Ratio.
 try { db.exec('ALTER TABLE oee_data ADD COLUMN batch TEXT') } catch { /* exists */ }
 try { db.exec('ALTER TABLE oee_data ADD COLUMN product TEXT') } catch { /* exists */ }
+// runtime_data gains idle/offline/planned hours (Guidewheel Trends state series)
+// for the time-based Idle % of Time. NULL when the export only has Runtime.
+try { db.exec('ALTER TABLE runtime_data ADD COLUMN idle_hrs REAL') } catch { /* exists */ }
+try { db.exec('ALTER TABLE runtime_data ADD COLUMN offline_hrs REAL') } catch { /* exists */ }
+try { db.exec('ALTER TABLE runtime_data ADD COLUMN planned_hrs REAL') } catch { /* exists */ }
 
 // ── Prepared Statements ────────────────────────────────────────────────────
 const stmts = {
@@ -234,11 +239,20 @@ const stmts = {
     INSERT OR REPLACE INTO settings (key, value, updated_at)
     VALUES (@key, @value, datetime('now'))
   `),
+  selectRuntime: db.prepare('SELECT * FROM runtime_data WHERE row_hash = @row_hash'),
   insertRuntime: db.prepare(`
-    INSERT OR IGNORE INTO runtime_data (row_hash, device, date, plant, shift, runtime_hrs, runtime_pct)
-    VALUES (@row_hash, @device, @date, @plant, @shift, @runtime_hrs, @runtime_pct)
+    INSERT INTO runtime_data (row_hash, device, date, plant, shift, runtime_hrs, runtime_pct, idle_hrs, offline_hrs, planned_hrs)
+    VALUES (@row_hash, @device, @date, @plant, @shift, @runtime_hrs, @runtime_pct, @idle_hrs, @offline_hrs, @planned_hrs)
   `),
-  getRuntime: db.prepare('SELECT device, date, plant, shift, runtime_hrs, runtime_pct FROM runtime_data ORDER BY device, date'),
+  // Re-upload refreshes the state columns so a Trends export that ADDS Idle/
+  // Offline series updates rows previously loaded from a Runtime-only export.
+  updateRuntime: db.prepare(`
+    UPDATE runtime_data SET
+      runtime_hrs = @runtime_hrs, runtime_pct = @runtime_pct,
+      idle_hrs = @idle_hrs, offline_hrs = @offline_hrs, planned_hrs = @planned_hrs
+    WHERE row_hash = @row_hash
+  `),
+  getRuntime: db.prepare('SELECT device, date, plant, shift, runtime_hrs, runtime_pct, idle_hrs, offline_hrs, planned_hrs FROM runtime_data ORDER BY device, date'),
   statsRuntime: db.prepare('SELECT COUNT(*) as n, MAX(ingested_at) as last FROM runtime_data'),
 }
 
@@ -285,17 +299,26 @@ const MONTH_MAP: Record<string, string> = {
   jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12',
 }
 
-function parseRuntimeHeader(header: string): { date: string; shift: string; plant: string; metric: 'pct' | 'hrs' | 'min' } | null {
-  // Remove metric suffix: "(Runtime %)", "(Runtime hrs)", "(Runtime min)"
-  const metricMatch = header.match(/\(Runtime\s+(hrs|%|min)\)\s*$/i)
-  if (!metricMatch) return null
-  const metricRaw = metricMatch[1].toLowerCase()
-  const metric: 'pct' | 'hrs' | 'min' = metricRaw === 'hrs' ? 'hrs' : metricRaw === '%' ? 'pct' : 'min'
+type RuntimeState = 'runtime' | 'idle' | 'offline' | 'planned'
 
-  // Strip the metric suffix (find " (Runtime" and take everything before)
-  const idx = header.lastIndexOf(' (Runtime')
-  if (idx < 0) return null
-  const withoutMetric = header.slice(0, idx).trim()
+function parseRuntimeHeader(header: string):
+  { date: string; shift: string; plant: string; state: RuntimeState; metric: 'pct' | 'hrs' | 'min' } | null {
+  // Match the trailing state+unit suffix, e.g. "(Runtime %)", "(Idle hrs)",
+  // "(Offline min)", "(Planned Downtime hrs)". Generalized beyond Runtime so a
+  // Trends export that includes Idle/Offline/Planned series populates them.
+  const metricMatch = header.match(/\(([A-Za-z][A-Za-z ]*?)\s+(hrs|%|min)\)\s*$/i)
+  if (!metricMatch) return null
+  const stateRaw = metricMatch[1].toLowerCase()
+  let state: RuntimeState
+  if (stateRaw.includes('runtime') || stateRaw.includes('uptime')) state = 'runtime'
+  else if (stateRaw.includes('idle')) state = 'idle'
+  else if (stateRaw.includes('offline')) state = 'offline'
+  else if (stateRaw.includes('planned')) state = 'planned'
+  else return null
+  const unit = metricMatch[2].toLowerCase()
+  const metric: 'pct' | 'hrs' | 'min' = unit === 'hrs' ? 'hrs' : unit === '%' ? 'pct' : 'min'
+
+  const withoutMetric = header.slice(0, header.length - metricMatch[0].length).trim()
 
   // Match date prefix: "Thu Jan 1 2026 - ..."
   const dateMatch = withoutMetric.match(
@@ -310,12 +333,12 @@ function parseRuntimeHeader(header: string): { date: string; shift: string; plan
   // Pattern 1: "1st Shift (Addison)" — plant in trailing parens
   const parenPlant = shiftPlant.match(/^(.+?)\s+\((Addison|Mayflower|Sparks)\)\s*$/i)
   if (parenPlant) {
-    return { date, shift: parenPlant[1].trim(), plant: parenPlant[2], metric }
+    return { date, shift: parenPlant[1].trim(), plant: parenPlant[2], state, metric }
   }
   // Pattern 2: "24 hrs shift - Sparks" — plant after last " - "
   const dashPlant = shiftPlant.match(/^(.+?)\s+-\s+(Addison|Mayflower|Sparks)\s*$/i)
   if (dashPlant) {
-    return { date, shift: dashPlant[1].trim(), plant: dashPlant[2], metric }
+    return { date, shift: dashPlant[1].trim(), plant: dashPlant[2], state, metric }
   }
   return null
 }
@@ -338,7 +361,7 @@ function parseRuntimeXLSX(buffer: Buffer): { records: RuntimeRecord[]; diagnosti
   const range = XLSX.utils.decode_range(ws['!ref'] || 'A1')
 
   // Parse column headers (row 0)
-  type ColMeta = { col: number; date: string; shift: string; plant: string; metric: 'pct' | 'hrs' | 'min' }
+  type ColMeta = { col: number; date: string; shift: string; plant: string; state: RuntimeState; metric: 'pct' | 'hrs' | 'min' }
   const columnMeta: (ColMeta | null)[] = []
   for (let c = 0; c <= range.e.c; c++) {
     if (c === 0) { columnMeta.push(null); continue }
@@ -348,13 +371,24 @@ function parseRuntimeXLSX(buffer: Buffer): { records: RuntimeRecord[]; diagnosti
     columnMeta.push(parsed ? { col: c, ...parsed } : null)
   }
 
-  // Only hrs columns are stored (most useful for energy normalisation)
-  const hrsCols = columnMeta.filter((m): m is ColMeta => m !== null && m.metric === 'hrs')
-  // Build a pct lookup: date|shift|plant → colIndex
-  const pctLookup = new Map<string, number>()
+  // Group hrs columns by date|shift|plant, collecting one column per state.
+  // A Runtime-only export yields groups with only a runtime column; idle/offline/
+  // planned stay undefined (→ stored null → "Runtime data needed" downstream).
+  type Group = { date: string; shift: string; plant: string; runtime?: number; idle?: number; offline?: number; planned?: number }
+  const hrsGroups = new Map<string, Group>()
+  const pctLookup = new Map<string, number>() // runtime pct only
   for (const m of columnMeta) {
-    if (m && m.metric === 'pct') pctLookup.set(`${m.date}|${m.shift}|${m.plant}`, m.col)
+    if (!m) continue
+    if (m.metric === 'hrs') {
+      const key = `${m.date}|${m.shift}|${m.plant}`
+      let g = hrsGroups.get(key)
+      if (!g) { g = { date: m.date, shift: m.shift, plant: m.plant }; hrsGroups.set(key, g) }
+      g[m.state] = m.col
+    } else if (m.metric === 'pct' && m.state === 'runtime') {
+      pctLookup.set(`${m.date}|${m.shift}|${m.plant}`, m.col)
+    }
   }
+  const groups = Array.from(hrsGroups.values())
 
   const SKIP_DEVICES = new Set(['Total', 'Sum', 'total', 'sum', ''])
   const records: RuntimeRecord[] = []
@@ -362,6 +396,15 @@ function parseRuntimeXLSX(buffer: Buffer): { records: RuntimeRecord[]; diagnosti
   let skippedDevice = 0
 
   const PLANT_MAP: Record<string, string> = { '1': 'Addison', '2': 'Mayflower', '3': 'Sparks' }
+
+  // Read a numeric cell value, or undefined if blank/non-numeric.
+  function numAt(r: number, col: number | undefined): number | undefined {
+    if (col === undefined) return undefined
+    const cell = ws[XLSX.utils.encode_cell({ r, c: col })]
+    if (!cell || cell.v === '' || cell.v === undefined || cell.v === null) return undefined
+    const n = typeof cell.v === 'number' ? cell.v : parseFloat(String(cell.v))
+    return isNaN(n) || n < 0 ? undefined : n
+  }
 
   for (let r = 1; r <= range.e.r; r++) {
     const devCell = ws[XLSX.utils.encode_cell({ r, c: 0 })]
@@ -372,16 +415,18 @@ function parseRuntimeXLSX(buffer: Buffer): { records: RuntimeRecord[]; diagnosti
     const devicePlant = PLANT_MAP[device.charAt(0)] ?? null
     if (!devicePlant) { skippedDevice++; continue }
 
-    for (const cm of hrsCols) {
+    for (const g of groups) {
       // Only include columns that match this device's plant
-      if (cm.plant.toLowerCase() !== devicePlant.toLowerCase()) continue
-      const cell = ws[XLSX.utils.encode_cell({ r, c: cm.col })]
-      if (!cell || cell.v === '' || cell.v === undefined || cell.v === null) continue
-      const hrs = typeof cell.v === 'number' ? cell.v : parseFloat(String(cell.v))
-      if (isNaN(hrs) || hrs < 0) continue
+      if (g.plant.toLowerCase() !== devicePlant.toLowerCase()) continue
+      const runtimeHrs = numAt(r, g.runtime)
+      const idleHrs = numAt(r, g.idle)
+      const offlineHrs = numAt(r, g.offline)
+      const plannedHrs = numAt(r, g.planned)
+      // Skip cells with no state data at all for this device-day-shift.
+      if (runtimeHrs === undefined && idleHrs === undefined && offlineHrs === undefined && plannedHrs === undefined) continue
 
       let pct = 0
-      const pctCol = pctLookup.get(`${cm.date}|${cm.shift}|${cm.plant}`)
+      const pctCol = pctLookup.get(`${g.date}|${g.shift}|${g.plant}`)
       if (pctCol !== undefined) {
         const pctCell = ws[XLSX.utils.encode_cell({ r, c: pctCol })]
         if (pctCell && typeof pctCell.v === 'number') pct = pctCell.v
@@ -389,11 +434,14 @@ function parseRuntimeXLSX(buffer: Buffer): { records: RuntimeRecord[]; diagnosti
 
       records.push({
         device,
-        date: cm.date,
+        date: g.date,
         plant: devicePlant,
-        shift: normalizeShift(cm.shift),
-        runtimeHrs: hrs,
+        shift: normalizeShift(g.shift),
+        runtimeHrs: runtimeHrs ?? 0,
         runtimePct: pct,
+        idleHrs: idleHrs ?? null,
+        offlineHrs: offlineHrs ?? null,
+        plannedHrs: plannedHrs ?? null,
       })
     }
   }
@@ -427,10 +475,11 @@ function ingestRuntime(buffer: Buffer, fileName: string) {
   let rowsAdded = 0
   let duplicatesSkipped = 0
 
+  let rowsUpdated = 0
   db.transaction(() => {
     for (const r of records) {
       const hash = rowHash(`${r.device}|${r.date}|${r.shift}|${r.plant}`)
-      const result = stmts.insertRuntime.run({
+      const params = {
         row_hash: hash,
         device: r.device,
         date: r.date,
@@ -438,8 +487,24 @@ function ingestRuntime(buffer: Buffer, fileName: string) {
         shift: r.shift,
         runtime_hrs: r.runtimeHrs,
         runtime_pct: r.runtimePct,
-      })
-      result.changes > 0 ? rowsAdded++ : duplicatesSkipped++
+        idle_hrs: r.idleHrs ?? null,
+        offline_hrs: r.offlineHrs ?? null,
+        planned_hrs: r.plannedHrs ?? null,
+      }
+      const existing = stmts.selectRuntime.get({ row_hash: hash }) as Record<string, unknown> | undefined
+      if (!existing) {
+        stmts.insertRuntime.run(params)
+        rowsAdded++
+      } else {
+        // Update when any state value changed (e.g. a re-upload adds idle/offline).
+        const changed =
+          existing.runtime_hrs !== params.runtime_hrs ||
+          (existing.idle_hrs ?? null) !== params.idle_hrs ||
+          (existing.offline_hrs ?? null) !== params.offline_hrs ||
+          (existing.planned_hrs ?? null) !== params.planned_hrs
+        if (changed) { stmts.updateRuntime.run(params); rowsUpdated++ }
+        else duplicatesSkipped++
+      }
     }
   })()
 
@@ -448,10 +513,10 @@ function ingestRuntime(buffer: Buffer, fileName: string) {
     table_name: 'runtime_data',
     rows_added: rowsAdded,
     duplicates_skipped: duplicatesSkipped,
-    rows_updated: 0,
+    rows_updated: rowsUpdated,
     rows_unchanged: duplicatesSkipped,
   })
-  return { rowsAdded, duplicatesSkipped, total: records.length, diagnostics }
+  return { rowsAdded, rowsUpdated, duplicatesSkipped, total: records.length, diagnostics }
 }
 
 // ── Energy Session Store ───────────────────────────────────────────────────
@@ -1137,6 +1202,9 @@ app.get('/api/data/runtime', (_req, res) => {
     shift: r.shift,
     runtimeHrs: r.runtime_hrs,
     runtimePct: r.runtime_pct ?? 0,
+    idleHrs: r.idle_hrs ?? null,
+    offlineHrs: r.offline_hrs ?? null,
+    plannedHrs: r.planned_hrs ?? null,
   }))
   const stat = stmts.statsRuntime.get() as { n: number; last: string | null }
   res.json({ records, total: records.length, lastUpdated: stat.last })

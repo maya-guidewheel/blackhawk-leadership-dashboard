@@ -737,6 +737,7 @@ export default function App() {
                       avgRows={avgEnergyRows}
                       deviceData={deviceData}
                       downtimeEvents={downtimeEvents}
+                      runtimeRecords={runtimeRecords}
                       lastUpdated={dataStatus?.energy_average.lastUpdated ?? null}
                     />
                   ) : (

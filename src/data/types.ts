@@ -146,4 +146,10 @@ export interface RuntimeRecord {
   shift: string      // 1st Shift | 2nd Shift | 3rd Shift | 24hr
   runtimeHrs: number
   runtimePct: number
+  // Guidewheel Trends machine-state hours, present only if the export includes
+  // these series (Runtime-only exports leave them undefined). Used for the
+  // time-based Idle % of Time on the Energy & Cost tab.
+  idleHrs?: number | null
+  offlineHrs?: number | null
+  plannedHrs?: number | null
 }

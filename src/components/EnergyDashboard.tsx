@@ -3,7 +3,7 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell, Legend, LabelList,
 } from 'recharts'
-import type { EnergyRow, EnergyRates, DeviceSummary, DowntimeEvent } from '../data/types'
+import type { EnergyRow, EnergyRates, DeviceSummary, DowntimeEvent, RuntimeRecord } from '../data/types'
 import { computeEnergyByMachine, computeEnergyByPlant, getPlantForMachine } from '../data/energyAggregations'
 import { axisTick, tooltipStyle, tooltipCursorFill, gridStroke, chartColor } from '../utils/chartTheme'
 import { apiFetch } from '../utils/api'
@@ -14,7 +14,29 @@ interface Props {
   avgRows: EnergyRow[]
   deviceData: DeviceSummary[]
   downtimeEvents?: DowntimeEvent[]
+  runtimeRecords?: RuntimeRecord[]
   lastUpdated?: string | null
+}
+
+// Time-based machine-state totals (hours) for a machine in the selected range,
+// summed from Guidewheel Trends data. hasIdleState is false when the imported
+// Trends export contains no Idle series (Runtime-only export) — the caller then
+// shows "Runtime data needed" instead of a fabricated percentage.
+interface RuntimeStateTotals {
+  runtimeHrs: number
+  idleHrs: number
+  offlineHrs: number
+  plannedHrs: number
+  hasIdleState: boolean
+}
+
+// Idle % of Time = idle / (runtime + idle + offline + planned). Returns null when
+// idle-state data is unavailable for the machine in range (→ "Runtime data needed").
+function idleTimePct(t: RuntimeStateTotals | undefined): number | null {
+  if (!t || !t.hasIdleState) return null
+  const denom = t.runtimeHrs + t.idleHrs + t.offlineHrs + t.plannedHrs
+  if (denom <= 0) return null
+  return (t.idleHrs / denom) * 100
 }
 
 const DEFAULT_RATES: EnergyRates = { Sparks: 0.09, Addison: 0.10, Mayflower: 0.08 }
@@ -182,30 +204,38 @@ function IdleProductiveTooltip({ active, payload, dateRangeLabel }: {
   )
 }
 
-// Rich tooltip for the Idle Waste chart — uses the SAME idle/productive energy
-// split as the Productive vs Idle chart above, so the % matches exactly.
+// Rich tooltip for the Idle Waste chart. Idle % of Time is TIME-based from
+// Guidewheel Trends; kWh/cost come from the energy export. The two data sources
+// are labeled so it's clear the % is not derived from energy.
 function IdleWasteTooltip({ active, payload, dateRangeLabel }: {
   active?: boolean
-  payload?: { payload: { machine: string; plant: string; idleKWh: number; productiveKWh: number; 'Idle Cost': number; idleDays: number; idlePctEnergy: number | null } }[]
+  payload?: { payload: { machine: string; plant: string; idleKWh: number; 'Idle Cost': number; idleDays: number; idlePctTime: number | null; runtimeHrs: number | null; idleHrs: number | null; offlineHrs: number | null; plannedHrs: number | null } }[]
   dateRangeLabel: string
 }) {
   if (!active || !payload?.length) return null
   const d = payload[0].payload
-  const pctText = d.idlePctEnergy === null ? 'N/A' : `${d.idlePctEnergy.toFixed(1)}%`
+  const hasState = d.idlePctTime !== null
   return (
     <div style={tooltipStyle} className="text-xs">
       <div className="font-semibold mb-1">{d.machine} · {d.plant}</div>
       <div className="opacity-70 mb-1">{dateRangeLabel}</div>
-      <div>Productive: {d.productiveKWh.toLocaleString()} kWh · Idle: {d.idleKWh.toLocaleString()} kWh</div>
-      <div>Idle cost: {fmtCostFull(d['Idle Cost'])} est. · Idle days: {d.idleDays}</div>
-      <div className="mt-0.5">Idle % of active energy: <span className="font-semibold">{pctText}</span></div>
+      <div>Idle: {d.idleKWh.toLocaleString()} kWh · {fmtCostFull(d['Idle Cost'])} est. · Idle days: {d.idleDays}</div>
+      {hasState ? (
+        <>
+          <div className="mt-1">Runtime: {d.runtimeHrs}h · Idle: {d.idleHrs}h · Offline: {d.offlineHrs}h{d.plannedHrs ? ` · Planned: ${d.plannedHrs}h` : ''}</div>
+          <div className="mt-0.5">Idle % of Time (idle ÷ total state time): <span className="font-semibold">{d.idlePctTime!.toFixed(1)}%</span></div>
+        </>
+      ) : (
+        <div className="mt-1 text-warning">Idle % of Time: Runtime state data needed (Trends export has no Idle series)</div>
+      )}
+      <div className="mt-1 opacity-70">Sources: energy export → kWh/cost · Trends export → runtime/idle/offline %</div>
     </div>
   )
 }
 
 // ── Main Component ────────────────────────────────────────────────────────────
 
-export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = [], lastUpdated = null }: Props) {
+export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = [], runtimeRecords = [], lastUpdated = null }: Props) {
   const [rates, setRates] = useState<EnergyRates>(DEFAULT_RATES)
   const [idleThreshold, setIdleThreshold] = useState(DEFAULT_IDLE_THRESHOLD)
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
@@ -273,6 +303,39 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
     )
     return ['All', ...Array.from(plants).sort()]
   }, [avgRows])
+
+  // Per-machine Guidewheel Trends state totals (hours) within the selected date
+  // range, summed across shifts. This is the SOLE source for Idle % of Time —
+  // energy/kWh is never used for the percentage. hasIdleState reflects whether
+  // the imported Trends export actually carried an Idle series for that machine.
+  const runtimeStateByMachine = useMemo(() => {
+    const map = new Map<string, RuntimeStateTotals>()
+    for (const r of runtimeRecords) {
+      if (!r?.device || !r?.date) continue
+      if (dateFrom && r.date < dateFrom) continue
+      if (dateTo && r.date > dateTo) continue
+      let t = map.get(r.device)
+      if (!t) { t = { runtimeHrs: 0, idleHrs: 0, offlineHrs: 0, plannedHrs: 0, hasIdleState: false }; map.set(r.device, t) }
+      t.runtimeHrs += r.runtimeHrs ?? 0
+      if (r.idleHrs != null) { t.idleHrs += r.idleHrs; t.hasIdleState = true }
+      if (r.offlineHrs != null) t.offlineHrs += r.offlineHrs
+      if (r.plannedHrs != null) t.plannedHrs += r.plannedHrs
+    }
+    return map
+  }, [runtimeRecords, dateFrom, dateTo])
+
+  // Local validation/debug for the known case: 1K2-01, Jun 1–26. Logs the
+  // time-based idle % computed from Trends so it can be compared to the table.
+  useEffect(() => {
+    if (dateFrom !== '2026-06-01' || dateTo !== '2026-06-26') return
+    const t = runtimeStateByMachine.get('1K2-01')
+    if (!t) { console.log('[idle-validate] 1K2-01 Jun1–26: no Trends rows imported → "Runtime data needed"'); return }
+    const pct = idleTimePct(t)
+    console.log('[idle-validate] 1K2-01 Jun1–26:', JSON.stringify({
+      runtimeHrs: t.runtimeHrs, idleHrs: t.idleHrs, offlineHrs: t.offlineHrs, plannedHrs: t.plannedHrs,
+      hasIdleState: t.hasIdleState, idlePctOfTime: pct === null ? 'Runtime data needed' : pct.toFixed(1) + '%',
+    }))
+  }, [runtimeStateByMachine, dateFrom, dateTo])
 
   // Filter rows by date, plant, machine type
   const filteredRows = useMemo(() => {
@@ -389,16 +452,19 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
   }))
 
   const idleChartData = top10Idle.map(m => {
-    // Identical to the Productive vs Idle chart: idle kWh / (idle + productive kWh).
-    const denom = m.idleKWh + m.productionKWh
+    const t = runtimeStateByMachine.get(m.machine)
     return {
       machine: m.machine,
       'Idle Cost': parseFloat(m.idleCost.toFixed(2)),
       plant: m.plant,
       idleKWh: Math.round(m.idleKWh),
-      productiveKWh: Math.round(m.productionKWh),
       idleDays: m.idleDays,
-      idlePctEnergy: denom > 0 ? (m.idleKWh / denom) * 100 : null,
+      // Time-based metric from Trends (null → "Runtime data needed").
+      idlePctTime: idleTimePct(t),
+      runtimeHrs: t ? Math.round(t.runtimeHrs) : null,
+      idleHrs: t && t.hasIdleState ? Math.round(t.idleHrs) : null,
+      offlineHrs: t && t.hasIdleState ? Math.round(t.offlineHrs) : null,
+      plannedHrs: t && t.hasIdleState ? Math.round(t.plannedHrs) : null,
     }
   })
 
@@ -1088,7 +1154,7 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
                     <th className="text-right">Idle kWh</th>
                     <th className="text-right">Idle Cost</th>
                     <th className="text-right" title="Number of days this machine drew idle-level power (at least one idle period). Not 24-hour idle blocks.">Idle Days ⓘ</th>
-                    <th className="text-right" title="Idle kWh divided by idle kWh + productive kWh for this machine in the selected range — the same productive/idle split shown in the chart above.">Idle % of Active Energy ⓘ</th>
+                    <th className="text-right" title="Idle time divided by total classified machine state time for the selected date range, using the same Runtime / Idle / Offline state logic shown in Guidewheel Trends. This is time-based, not kWh-based.">Idle % of Time ⓘ</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1099,10 +1165,9 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
                       </td>
                     </tr>
                   ) : top10Idle.map((m, idx) => {
-                    // Same calculation as the Productive vs Idle chart above:
-                    // idle kWh / (idle kWh + productive kWh).
-                    const denom = m.idleKWh + m.productionKWh
-                    const idlePct = denom > 0 ? (m.idleKWh / denom) * 100 : null
+                    // Time-based, from Guidewheel Trends state hours (NOT kWh).
+                    // null → the Trends export carried no Idle series for this machine.
+                    const pct = idleTimePct(runtimeStateByMachine.get(m.machine))
                     return (
                     <tr key={m.machine}>
                       <td>
@@ -1117,10 +1182,10 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
                       </td>
                       <td className="text-right">{m.idleDays}</td>
                       <td className="text-right">
-                        {idlePct === null ? (
-                          <span className="text-muted-foreground">N/A</span>
+                        {pct === null ? (
+                          <span className="text-muted-foreground" title="Guidewheel Trends runtime/idle/offline state data is not available for this machine and range.">Runtime data needed</span>
                         ) : (
-                          `${idlePct.toFixed(1)}%`
+                          `${pct.toFixed(1)}%`
                         )}
                       </td>
                     </tr>
@@ -1132,9 +1197,12 @@ export default function EnergyDashboard({ avgRows, deviceData, downtimeEvents = 
           </div>
         </div>
         <p className="text-xs mt-3 text-muted-foreground">
-          <span className="font-semibold text-foreground">Methodology:</span> Idle Days = days with at least one idle-level energy period,
-          not full-day idle blocks. Idle % of Active Energy = idle kWh divided by idle kWh + productive kWh for the selected range,
-          using the same productive/idle split shown in the chart above. Costs are estimated from the editable per-plant energy rates.
+          <span className="font-semibold text-foreground">Methodology:</span> Idle kWh and idle cost are estimated from energy readings
+          using the configured idle threshold. Idle % of Time is calculated separately from Guidewheel Trends runtime data as idle time
+          divided by total classified machine state time (Runtime + Idle + Offline{' '}
+          + Planned when present) in the selected range. It is not calculated from kWh. Idle Days = days with at least one idle-level
+          energy period, not full-day idle blocks. If the imported Trends export has no Idle/Offline state series for a machine, its
+          Idle % of Time shows “Runtime data needed”.
         </p>
       </section>
 
