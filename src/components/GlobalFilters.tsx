@@ -1,4 +1,5 @@
 import { useMemo, useState, useRef, useEffect } from 'react'
+import { createPortal } from 'react-dom'
 import { format } from 'date-fns'
 import type { FilterState, ColorChangeEvent, ChangeoverTargets } from '../data/types'
 import { trackEvent } from '../analytics/posthog'
@@ -68,14 +69,35 @@ function MachineMultiSelect({
 }) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
+  // The menu is rendered in a portal on document.body (so no ancestor's
+  // overflow:hidden can clip it). It's positioned as a fixed element anchored
+  // to the trigger button's on-screen rect.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number; width: number } | null>(null)
 
   useEffect(() => {
     if (!open) return
     function onDocClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+      const target = e.target as Node
+      // Ignore clicks inside the trigger wrapper or the portalled menu itself.
+      if (ref.current?.contains(target)) return
+      if (menuRef.current?.contains(target)) return
+      setOpen(false)
     }
+    // Anchor the fixed menu to the button and keep it aligned on scroll/resize.
+    function reposition() {
+      const btn = ref.current?.getBoundingClientRect()
+      if (btn) setMenuPos({ top: btn.bottom + 4, left: btn.left, width: btn.width })
+    }
+    reposition()
     document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
+    window.addEventListener('resize', reposition)
+    window.addEventListener('scroll', reposition, true)
+    return () => {
+      document.removeEventListener('mousedown', onDocClick)
+      window.removeEventListener('resize', reposition)
+      window.removeEventListener('scroll', reposition, true)
+    }
   }, [open])
 
   // Drop any selected devices that aren't available under the current plant.
@@ -106,8 +128,12 @@ function MachineMultiSelect({
         <span className="truncate">{summary}</span>
         <span className="text-muted-foreground text-[0.6rem]">▼</span>
       </button>
-      {open && (
-        <div className="absolute z-20 mt-1 w-64 max-h-72 overflow-auto rounded-md border border-border bg-card shadow-lg">
+      {open && menuPos && createPortal(
+        <div
+          ref={menuRef}
+          className="fixed z-[9999] w-64 max-h-72 overflow-auto rounded-md border border-border bg-card shadow-lg"
+          style={{ top: menuPos.top, left: menuPos.left }}
+        >
           <div className="flex items-center justify-between px-3 py-2 border-b border-border sticky top-0 bg-card">
             <button
               type="button"
@@ -146,7 +172,8 @@ function MachineMultiSelect({
               <li className="px-3 py-2 text-xs text-muted-foreground">No machines in scope</li>
             )}
           </ul>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   )
