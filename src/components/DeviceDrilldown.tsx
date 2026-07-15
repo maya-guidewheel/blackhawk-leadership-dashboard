@@ -3,8 +3,10 @@ import type {
   DeviceSummary,
   WeeklyDeviceCell,
   ColorChangeEvent,
+  ChangeoverTargets,
 } from "../data/types";
 import { formatShortDate, formatDuration } from "../utils/dates";
+import { targetForType } from "../data/targets";
 import { trackEvent } from "../analytics/posthog";
 import DrilldownPanel from "./DrilldownPanel";
 
@@ -12,7 +14,7 @@ interface Props {
   deviceData: DeviceSummary[];
   heatmapData: WeeklyDeviceCell[];
   events: ColorChangeEvent[];
-  threshold: number;
+  targets: ChangeoverTargets;
 }
 
 type MetricKey = "avg" | "total" | "count";
@@ -37,7 +39,7 @@ export default function DeviceDrilldown({
   deviceData,
   heatmapData,
   events,
-  threshold,
+  targets,
 }: Props) {
   const [metric, setMetric] = useState<MetricKey>("avg");
   const [drillDevice, setDrillDevice] = useState<string | null>(null);
@@ -76,6 +78,8 @@ export default function DeviceDrilldown({
               <tr className="text-left">
                 <th>Device</th>
                 <th>Plant</th>
+                <th>Type</th>
+                <th className="text-right">Target</th>
                 <th className="text-right">Count</th>
                 <th className="text-right">Avg</th>
                 <th className="text-right">Median</th>
@@ -86,6 +90,7 @@ export default function DeviceDrilldown({
             </thead>
             <tbody>
               {deviceData.map((d) => {
+                const target = targetForType(d.changeover_type, targets);
                 return (
                   <tr
                     key={d.device}
@@ -93,12 +98,14 @@ export default function DeviceDrilldown({
                     onClick={() => openDeviceDrilldown(d.device)}
                   >
                     <td className="font-mono text-xs font-semibold">
-                      <span className={`mr-2 ${dotColor(d.p90, threshold)}`}>
+                      <span className={`mr-2 ${dotColor(d.p90, target)}`}>
                         ●
                       </span>
                       {d.device}
                     </td>
                     <td>{d.plant}</td>
+                    <td className="text-xs text-muted-foreground">{d.changeover_type}</td>
+                    <td className="text-right text-muted-foreground">≤ {formatDuration(target)}</td>
                     <td className="text-right">{d.count}</td>
                     <td className="text-right">{formatDuration(d.avg)}</td>
                     <td className="text-right">{formatDuration(d.median)}</td>

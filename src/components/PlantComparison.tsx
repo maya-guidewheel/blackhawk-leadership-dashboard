@@ -5,7 +5,6 @@ import { axisTick, tooltipStyle, tooltipCursorFill, gridStroke, chartColor } fro
 
 interface Props {
   data: PlantSummary[]
-  threshold: number
 }
 
 export default function PlantComparison({ data }: Props) {

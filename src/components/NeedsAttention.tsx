@@ -1,14 +1,15 @@
 import { useState, Fragment } from 'react'
-import type { ColorChangeEvent, DeviceSummary, WeeklyPlantRow, PlantSummary } from '../data/types'
+import type { ColorChangeEvent, DeviceSummary, WeeklyPlantRow, PlantSummary, ChangeoverTargets } from '../data/types'
 import { formatDate, formatShortDate, formatDuration } from '../utils/dates'
 import { classifyChangeover } from '../data/changeover'
+import { targetForType } from '../data/targets'
 
 interface Props {
   events: ColorChangeEvent[]
   deviceData: DeviceSummary[]
   plantData: PlantSummary[]
   weeklyPlantData: WeeklyPlantRow[]
-  threshold: number
+  targets: ChangeoverTargets
 }
 
 function statusDot(p90: number, threshold: number) {
@@ -17,7 +18,7 @@ function statusDot(p90: number, threshold: number) {
   return { badgeClass: 'bg-danger/10 text-danger', label: 'Off target' }
 }
 
-export default function NeedsAttention({ events, deviceData, plantData, weeklyPlantData, threshold }: Props) {
+export default function NeedsAttention({ events, deviceData, plantData, weeklyPlantData, targets }: Props) {
   // Track which Top-10 row is expanded for tag verification.
   const [expandedRow, setExpandedRow] = useState<number | null>(null)
   // Plant health summary
@@ -25,10 +26,12 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
   const fastestPlant = plantHealth[0]
   const slowestPlant = plantHealth[plantHealth.length - 1]
 
-  // Highest opportunity: off-target machines sorted by gap above threshold
+  // Highest opportunity: off-target machines sorted by gap above their own
+  // per-type target (color 45 / roll 10 / foam 10).
   const offTarget = deviceData
-    .filter(d => d.p90 > threshold)
-    .map(d => ({ ...d, gap: d.p90 - threshold }))
+    .map(d => ({ ...d, target: targetForType(d.changeover_type, targets) }))
+    .filter(d => d.p90 > d.target)
+    .map(d => ({ ...d, gap: d.p90 - d.target }))
     .sort((a, b) => b.gap - a.gap)
 
   const topOpportunity = offTarget[0]
@@ -108,7 +111,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
               </div>
               <div className="text-lg font-bold text-success">All On Target</div>
               <div className="text-sm mt-0.5 text-muted-foreground">
-                All machines P90 ≤ {formatDuration(threshold)}
+                Every machine P90 is within its type target
               </div>
             </div>
           )}
@@ -195,7 +198,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
         {/* Off-target machines */}
         <div className="bh-card overflow-hidden">
           <div className="bh-sub-header">
-            <h3>Off-Target Machines (P90 &gt; {formatDuration(threshold)})</h3>
+            <h3>Off-Target Machines (P90 &gt; per-type target)</h3>
           </div>
           <div className="overflow-x-auto">
             <table className="bh-table">
@@ -203,6 +206,7 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
                 <tr className="text-left">
                   <th>Device</th>
                   <th>Plant</th>
+                  <th className="text-right">Target</th>
                   <th className="text-right">P90</th>
                   <th className="text-right">Avg</th>
                   <th className="text-right">Count</th>
@@ -212,17 +216,18 @@ export default function NeedsAttention({ events, deviceData, plantData, weeklyPl
               <tbody>
                 {offTarget.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="text-center py-6 text-muted-foreground">
-                      All machines within threshold
+                    <td colSpan={7} className="text-center py-6 text-muted-foreground">
+                      All machines within their type target
                     </td>
                   </tr>
                 ) : (
                   offTarget.map(d => {
-                    const s = statusDot(d.p90, threshold)
+                    const s = statusDot(d.p90, d.target)
                     return (
                       <tr key={d.device}>
                         <td className="font-mono text-xs font-semibold">{d.device}</td>
                         <td>{d.plant}</td>
+                        <td className="text-right text-muted-foreground">≤ {formatDuration(d.target)}</td>
                         <td className="text-right font-semibold text-danger">{formatDuration(d.p90)}</td>
                         <td className="text-right">{formatDuration(d.avg)}</td>
                         <td className="text-right">{d.count}</td>

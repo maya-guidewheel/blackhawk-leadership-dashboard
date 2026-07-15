@@ -1,15 +1,19 @@
-import type { StatsSummary, ColorChangeEvent } from '../data/types'
+import type { StatsSummary, ColorChangeEvent, ChangeoverTargets } from '../data/types'
 import { formatDuration } from '../utils/dates'
+import { isOnTarget } from '../data/targets'
 
 interface Props {
   stats: StatsSummary
-  threshold: number
+  targets: ChangeoverTargets
   events: ColorChangeEvent[]
 }
 
-export default function KPICards({ stats, threshold, events }: Props) {
+export default function KPICards({ stats, targets, events }: Props) {
+  // On-target uses each event's own per-type target (color 45 / roll 10 / foam 10).
+  const onTargetCount = events.filter(e => isOnTarget(e, targets)).length
+  const overTargetCount = events.length - onTargetCount
   const onTargetPct = events.length > 0
-    ? Math.round((events.filter(e => e.duration <= threshold).length / events.length) * 100)
+    ? Math.round((onTargetCount / events.length) * 100)
     : 0
 
   const pctColorClass = onTargetPct >= 90
@@ -21,7 +25,9 @@ export default function KPICards({ stats, threshold, events }: Props) {
   const metricCards: { label: string; value: string; suffix?: string; colorClass?: string }[] = [
     { label: 'Total Changeovers', value: stats.count.toLocaleString() },
     { label: '% On Target', value: `${onTargetPct}%`, colorClass: pctColorClass },
+    { label: 'Over Target', value: overTargetCount.toLocaleString(), colorClass: overTargetCount > 0 ? 'text-danger' : 'text-success' },
     { label: 'Average Duration', value: formatDuration(stats.avg) },
+    { label: 'Cumulative Duration', value: formatDuration(stats.total) },
     { label: 'Median Duration', value: formatDuration(stats.median) },
     { label: '90th Percentile', value: formatDuration(stats.p90) },
     { label: 'Fastest Event', value: formatDuration(stats.fastest) },
@@ -29,7 +35,7 @@ export default function KPICards({ stats, threshold, events }: Props) {
   ]
 
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 mb-7">
+    <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mb-7">
       {metricCards.map(c => (
         <div
           key={c.label}

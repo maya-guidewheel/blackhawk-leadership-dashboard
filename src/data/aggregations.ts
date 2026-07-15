@@ -64,6 +64,7 @@ export function deviceSummaries(events: ColorChangeEvent[]): DeviceSummary[] {
     .map(([device, evts]) => ({
       device,
       plant: evts[0].plant,
+      changeover_type: evts[0].changeover_type,
       ...computeStats(evts),
     }))
     .sort((a, b) => a.device.localeCompare(b.device))

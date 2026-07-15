@@ -1,6 +1,6 @@
-import { useMemo } from 'react'
+import { useMemo, useState, useRef, useEffect } from 'react'
 import { format } from 'date-fns'
-import type { FilterState, ColorChangeEvent } from '../data/types'
+import type { FilterState, ColorChangeEvent, ChangeoverTargets } from '../data/types'
 import { trackEvent } from '../analytics/posthog'
 
 interface Props {
@@ -10,21 +10,16 @@ interface Props {
   filteredCount: number
 }
 
-function fmtDateFull(iso: string): string {
-  if (!iso) return '—'
-  try {
-    return new Date(iso + 'T00:00:00').toLocaleDateString('en-US', {
-      month: 'long', day: 'numeric', year: 'numeric',
-    })
-  } catch { return iso }
-}
-
 function fmtDateLabel(iso: string): string {
   try {
     return format(new Date(iso + 'T00:00:00'), 'MMM d, yyyy')
   } catch {
     return iso
   }
+}
+
+function startOfCurrentYear(): string {
+  return `${new Date().getFullYear()}-01-01`
 }
 
 function Chip({
@@ -58,13 +53,113 @@ function Chip({
   )
 }
 
+// ── Multi-select machine dropdown ────────────────────────────────────────────
+// Compact button + checkbox popover. An empty `selected` array means All Machines.
+function MachineMultiSelect({
+  options,
+  selected,
+  onChange,
+  inputClass,
+}: {
+  options: string[]
+  selected: string[]
+  onChange: (next: string[]) => void
+  inputClass: string
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    function onDocClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [open])
+
+  // Drop any selected devices that aren't available under the current plant.
+  const validSelected = selected.filter(s => options.includes(s))
+
+  const summary =
+    validSelected.length === 0
+      ? 'All Machines'
+      : validSelected.length === 1
+      ? validSelected[0]
+      : `${validSelected.length} machines`
+
+  function toggle(device: string) {
+    const next = validSelected.includes(device)
+      ? validSelected.filter(d => d !== device)
+      : [...validSelected, device]
+    onChange(next)
+  }
+
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        className={`${inputClass} flex items-center justify-between gap-2 min-w-[10rem] text-left`}
+        title="Select one or more machines"
+      >
+        <span className="truncate">{summary}</span>
+        <span className="text-muted-foreground text-[0.6rem]">▼</span>
+      </button>
+      {open && (
+        <div className="absolute z-20 mt-1 w-64 max-h-72 overflow-auto rounded-md border border-border bg-card shadow-lg">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-border sticky top-0 bg-card">
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className={`text-xs font-semibold ${validSelected.length === 0 ? 'text-btn-primary' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {validSelected.length === 0 ? '✓ All Machines' : 'All Machines'}
+            </button>
+            {validSelected.length > 0 && (
+              <button
+                type="button"
+                onClick={() => onChange([])}
+                className="text-[0.65rem] font-semibold underline text-muted-foreground hover:text-foreground"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <ul className="py-1">
+            {options.map(d => {
+              const checked = validSelected.includes(d)
+              return (
+                <li key={d}>
+                  <label className="flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer hover:bg-background-accent">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggle(d)}
+                    />
+                    <span className="font-mono text-xs">{d}</span>
+                  </label>
+                </li>
+              )
+            })}
+            {options.length === 0 && (
+              <li className="px-3 py-2 text-xs text-muted-foreground">No machines in scope</li>
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function GlobalFilters({ filters, onChange, events, filteredCount }: Props) {
   const plants = ['All', ...new Set(events.map(e => e.plant))].sort()
-  const devices = ['All', ...new Set(
+  // Machine options honor the active plant filter.
+  const deviceOptions = useMemo(() => [...new Set(
     events
       .filter(e => filters.plant === 'All' || e.plant === filters.plant)
       .map(e => e.device)
-  )].sort()
+  )].sort(), [events, filters.plant])
 
   const minDate = useMemo(() => {
     if (events.length === 0) return ''
@@ -90,24 +185,38 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
     onChange(next)
   }
 
+  function updateTargets(partial: Partial<ChangeoverTargets>) {
+    update({ targets: { ...filters.targets, ...partial } })
+  }
+
+  // Reset to the Changeover-tab default: start of the current year (clamped to
+  // available data) through the latest loaded date, all machines/plants/types.
   function resetAll() {
-    const dates = events.map(e => e.calendar_date).sort()
+    const yearStart = startOfCurrentYear()
+    let from = minDate && yearStart > minDate ? yearStart : (minDate || filters.dateFrom)
+    if (maxDate && from > maxDate) from = minDate || filters.dateFrom
     onChange({
       ...filters,
-      dateFrom: dates[0] ?? filters.dateFrom,
-      dateTo: dates[dates.length - 1] ?? filters.dateTo,
+      dateFrom: from,
+      dateTo: maxDate || filters.dateTo,
       plant: 'All',
-      device: 'All',
+      devices: [],
       changeoverType: 'All',
     })
   }
 
   const CHANGEOVER_TYPES = ['All', 'Color Change', 'Foam Change', 'Roll Change']
 
-  const isFiltered = filters.plant !== 'All' || filters.device !== 'All' || filters.changeoverType !== 'All'
+  const selectedDevices = filters.devices.filter(d => deviceOptions.includes(d))
+  const isFiltered = filters.plant !== 'All' || selectedDevices.length > 0 || filters.changeoverType !== 'All'
 
   const inputClass = 'border border-border rounded px-2 py-1.5 text-sm text-foreground focus:outline-none focus:ring-1 bg-card'
   const labelClass = 'bh-metric-label mb-1 block'
+
+  // Show up to 4 machine names individually; collapse the rest into a count.
+  const MAX_MACHINE_CHIPS = 4
+  const shownMachines = selectedDevices.slice(0, MAX_MACHINE_CHIPS)
+  const extraMachines = selectedDevices.length - shownMachines.length
 
   return (
     <div className="bh-card mb-7 overflow-hidden border-l-[3px] border-l-btn-primary">
@@ -127,19 +236,35 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
           <Chip
             label={filters.plant === 'All' ? 'All Plants' : filters.plant}
             active={filters.plant !== 'All'}
-            onClear={filters.plant !== 'All' ? () => update({ plant: 'All', device: 'All' }) : undefined}
+            onClear={filters.plant !== 'All' ? () => update({ plant: 'All', devices: [] }) : undefined}
           />
-          <Chip
-            label={filters.device === 'All' ? 'All Machines' : filters.device}
-            active={filters.device !== 'All'}
-            onClear={filters.device !== 'All' ? () => update({ device: 'All' }) : undefined}
-          />
+          {selectedDevices.length === 0 ? (
+            <Chip label="All Machines" />
+          ) : (
+            <>
+              {shownMachines.map(d => (
+                <Chip
+                  key={d}
+                  label={d}
+                  active
+                  onClear={() => update({ devices: selectedDevices.filter(x => x !== d) })}
+                />
+              ))}
+              {extraMachines > 0 && <Chip label={`+${extraMachines} more`} active />}
+              <button
+                onClick={() => update({ devices: [] })}
+                className="text-[0.65rem] font-semibold underline text-muted-foreground"
+              >
+                Clear machines
+              </button>
+            </>
+          )}
           <Chip
             label={filters.changeoverType === 'All' ? 'All Types' : filters.changeoverType}
             active={filters.changeoverType !== 'All'}
             onClear={filters.changeoverType !== 'All' ? () => update({ changeoverType: 'All' }) : undefined}
           />
-          <Chip label={`Target ≤ ${filters.threshold} min`} />
+          <Chip label={`Targets: Color ≤${filters.targets.color} · Roll ≤${filters.targets.roll} · Foam ≤${filters.targets.foam} min`} />
           {isFiltered && (
             <button
               onClick={resetAll}
@@ -186,21 +311,20 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
           <label className={labelClass}>Plant</label>
           <select
             value={filters.plant}
-            onChange={e => update({ plant: e.target.value, device: 'All' })}
+            onChange={e => update({ plant: e.target.value, devices: [] })}
             className={inputClass}
           >
             {plants.map(p => <option key={p} value={p}>{p}</option>)}
           </select>
         </div>
         <div>
-          <label className={labelClass}>Machine</label>
-          <select
-            value={filters.device}
-            onChange={e => update({ device: e.target.value })}
-            className={inputClass}
-          >
-            {devices.map(d => <option key={d} value={d}>{d}</option>)}
-          </select>
+          <label className={labelClass}>Machines</label>
+          <MachineMultiSelect
+            options={deviceOptions}
+            selected={filters.devices}
+            onChange={devices => update({ devices })}
+            inputClass={inputClass}
+          />
         </div>
         <div>
           <label className={labelClass}>Type</label>
@@ -212,16 +336,43 @@ export default function GlobalFilters({ filters, onChange, events, filteredCount
             {CHANGEOVER_TYPES.map(t => <option key={t} value={t}>{t === 'All' ? 'All Types' : t}</option>)}
           </select>
         </div>
+
+        {/* Per-type targets — Rey (Jul 15): color 45, roll 10, foam 10 (foam TBC). */}
         <div>
-          <label className={labelClass}>Target (min)</label>
+          <label className={labelClass}>Color target (min)</label>
           <input
             type="number"
-            value={filters.threshold}
-            onChange={e => update({ threshold: Number(e.target.value) || 45 })}
+            value={filters.targets.color}
+            onChange={e => updateTargets({ color: Number(e.target.value) || 0 })}
             className={`${inputClass} w-20`}
             min={1}
           />
         </div>
+        <div>
+          <label className={labelClass}>Roll target (min)</label>
+          <input
+            type="number"
+            value={filters.targets.roll}
+            onChange={e => updateTargets({ roll: Number(e.target.value) || 0 })}
+            className={`${inputClass} w-20`}
+            min={1}
+          />
+        </div>
+        <div>
+          <label className={labelClass}>Foam target (min)</label>
+          <input
+            type="number"
+            value={filters.targets.foam}
+            onChange={e => updateTargets({ foam: Number(e.target.value) || 0 })}
+            className={`${inputClass} w-20`}
+            min={1}
+          />
+        </div>
+      </div>
+
+      <div className="px-4 pb-3 -mt-1 text-[0.65rem] text-muted-foreground">
+        Targets apply per changeover type: color changes are compared to the Color target, roll and foam changes to their own.
+        Machines with an unrecognized type fall back to the Color target.
       </div>
 
       {noDataInRange && (

@@ -51,6 +51,10 @@ export interface PlantSummary extends StatsSummary {
 export interface DeviceSummary extends StatsSummary {
   device: string
   plant: string
+  // The changeover type of this machine (Color Change / Roll Change / Foam Change
+  // / Other), derived from the machine's events. Used to apply the correct
+  // per-type target when flagging a device as on/off target.
+  changeover_type: string
 }
 
 export interface WeeklyPlantRow extends StatsSummary {
@@ -66,12 +70,24 @@ export interface WeeklyDeviceCell {
   count: number
 }
 
+// Per-changeover-type duration targets (minutes). Rey (Jul 15 2026): color
+// changes and roll/foam changes have very different expected durations, so a
+// single global target is wrong. "other" is the fallback for Other/Unknown types.
+export interface ChangeoverTargets {
+  color: number   // Color Change
+  roll: number    // Roll Change
+  foam: number    // Foam Change
+  other: number   // Other / Unknown fallback
+}
+
 export interface FilterState {
   dateFrom: string
   dateTo: string
   plant: string
-  device: string
-  threshold: number
+  // Multi-select machine filter. An empty array means "All Machines".
+  devices: string[]
+  // Per-type targets replace the former single `threshold`.
+  targets: ChangeoverTargets
   changeoverType: string
 }
 

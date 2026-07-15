@@ -27,6 +27,7 @@ import {
   weeklyDeviceMatrix,
 } from './data/aggregations'
 import type { ColorChangeEvent, FilterState, EnergyRow, DowntimeEvent, OEERecord, RuntimeRecord } from './data/types'
+import { DEFAULT_TARGETS, targetForType } from './data/targets'
 import { getCalendarDate, formatServerTimestamp } from './utils/dates'
 
 type Tab = 'changeover' | 'tagging' | 'oee' | 'energy' | 'energy-uptime' | 'data' | 'callouts'
@@ -96,17 +97,38 @@ interface UploadFeedback {
   }
 }
 
+// Rey (Jul 15 2026): the Changeover tab should default to the current calendar
+// year, not the full history. Start = Jan 1 of the current year; end = today.
+// On data load this is clamped to the available data range (see loadAll).
+function startOfCurrentYear(): string {
+  return `${new Date().getFullYear()}-01-01`
+}
+
 function getDefaultFilters(): FilterState {
   const today = new Date()
-  const thirtyDaysAgo = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
   return {
-    dateFrom: getCalendarDate(thirtyDaysAgo),
+    dateFrom: startOfCurrentYear(),
     dateTo: getCalendarDate(today),
     plant: 'All',
-    device: 'All',
-    threshold: 45,
+    devices: [],
+    targets: { ...DEFAULT_TARGETS },
     changeoverType: 'All',
   }
+}
+
+// Default Changeover range once data is loaded: start at Jan 1 of the current
+// year (clamped forward if data begins later so we never select outside the
+// data), end at the latest loaded date.
+function defaultRangeForData(sortedDates: string[]): { dateFrom: string; dateTo: string } {
+  const dataMin = sortedDates[0]
+  const dataMax = sortedDates[sortedDates.length - 1]
+  const yearStart = startOfCurrentYear()
+  // Clamp the start forward to dataMin if the year starts before any data.
+  let from = yearStart > dataMin ? yearStart : dataMin
+  // Guard: if the current year begins after all available data (e.g. only
+  // prior-year data loaded), fall back to showing the full range.
+  if (from > dataMax) from = dataMin
+  return { dateFrom: from, dateTo: dataMax }
 }
 
 // Server timestamps are UTC; render them in the viewer's local timezone.
@@ -186,7 +208,7 @@ export default function App() {
 
       if (events.length > 0) {
         const dates = events.map(e => e.calendar_date).sort()
-        setFilters(f => ({ ...f, dateFrom: dates[0], dateTo: dates[dates.length - 1] }))
+        setFilters(f => ({ ...f, ...defaultRangeForData(dates) }))
       }
 
       // Load energy data only if the energy session token is already valid.
@@ -294,7 +316,7 @@ export default function App() {
     setAllEvents(events)
     if (events.length > 0) {
       const dates = events.map(e => e.calendar_date).sort()
-      setFilters(f => ({ ...f, dateFrom: dates[0], dateTo: dates[dates.length - 1] }))
+      setFilters(f => ({ ...f, ...defaultRangeForData(dates) }))
     }
     // Also refresh downtime since issues CSV also ingests downtime
     await refreshDowntime()
@@ -361,7 +383,8 @@ export default function App() {
   const filtered = useMemo(() => allEvents.filter(e => {
     if (e.calendar_date < filters.dateFrom || e.calendar_date > filters.dateTo) return false
     if (filters.plant !== 'All' && e.plant !== filters.plant) return false
-    if (filters.device !== 'All' && e.device !== filters.device) return false
+    // Empty devices array = All Machines; otherwise the event's device must be selected.
+    if (filters.devices.length > 0 && !filters.devices.includes(e.device)) return false
     if (filters.changeoverType !== 'All' && e.changeover_type !== filters.changeoverType) return false
     return true
   }), [allEvents, filters])
@@ -371,6 +394,15 @@ export default function App() {
   const deviceData = useMemo(() => deviceSummaries(filtered), [filtered])
   const weeklyPlantData = useMemo(() => weeklyPlantSummaries(filtered), [filtered])
   const heatmapData = useMemo(() => weeklyDeviceMatrix(filtered), [filtered])
+
+  // Reference-line target for the weekly-trend chart. A single line only makes
+  // sense when one changeover type is in view (targets differ by type); if the
+  // filtered set mixes types we omit the line rather than mislead.
+  const trendTarget = useMemo(() => {
+    if (filters.changeoverType !== 'All') return targetForType(filters.changeoverType, filters.targets)
+    const types = new Set(filtered.map(e => e.changeover_type))
+    return types.size === 1 ? targetForType([...types][0], filters.targets) : undefined
+  }, [filtered, filters.changeoverType, filters.targets])
 
   const hasAnyData = allEvents.length > 0 || avgEnergyRows.length > 0 || energyUsageRows.length > 0
 
@@ -658,18 +690,18 @@ export default function App() {
                   {allEvents.length > 0 ? (
                     <>
                       <GlobalFilters filters={filters} onChange={setFilters} events={allEvents} filteredCount={filtered.length} />
-                      <KPICards stats={stats} threshold={filters.threshold} events={filtered} />
+                      <KPICards stats={stats} targets={filters.targets} events={filtered} />
                       <NeedsAttention
                         events={filtered}
                         deviceData={deviceData}
                         plantData={plantData}
                         weeklyPlantData={weeklyPlantData}
-                        threshold={filters.threshold}
+                        targets={filters.targets}
                       />
-                      <PlantComparison data={plantData} threshold={filters.threshold} />
+                      <PlantComparison data={plantData} />
                       <WeeklyPlantSummary data={weeklyPlantData} events={filtered} />
-                      <DeviceDrilldown deviceData={deviceData} heatmapData={heatmapData} events={filtered} threshold={filters.threshold} />
-                      <TrendView events={filtered} threshold={filters.threshold} />
+                      <DeviceDrilldown deviceData={deviceData} heatmapData={heatmapData} events={filtered} targets={filters.targets} />
+                      <TrendView events={filtered} threshold={trendTarget} />
                       <ExportButtons
                         events={filtered}
                         plantData={plantData}
